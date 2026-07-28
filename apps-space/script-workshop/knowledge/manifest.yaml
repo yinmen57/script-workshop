@@ -1,0 +1,15 @@
+# 知识库语料清单：目录 -> 向量命名空间
+# 语料文件为 Markdown，文件内用单独一行的 --- 分隔多个知识条目，每条独立入库。
+# 租户由索引脚本使用的凭证决定，此处不声明 tenant_id，避免与实际写入租户不一致。
+namespaces:
+  - namespace: script/craft/prompting
+    dir: craft-prompting
+    description: 内容类型机制、分镜脚本结构、roles 提取规则、提示词模板与产品替换铁律
+
+  - namespace: script/craft/cinematography
+    dir: craft-cinematography
+    description: 景别、机位、构图、运镜与按内容类型区分的节奏口径
+
+  - namespace: script/craft/visual-style
+    dir: craft-visual-style
+    description: 生图/生视频模型参数规范、光影调色模板、内容安全红线

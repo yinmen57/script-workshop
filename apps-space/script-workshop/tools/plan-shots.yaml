@@ -1,0 +1,11 @@
+id: plan-shots
+name: 规划分镜
+description: 基于已确认资产与场景生成分镜计划。
+risk_level: low
+entrypoint: src/tools.py:plan_shots
+parameters:
+  type: object
+  properties:
+    project_id:
+      type: string
+  required: [project_id]

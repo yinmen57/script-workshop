@@ -1,0 +1,10 @@
+name: 剧本解析 Agent
+role: specialist
+description: 提取风格圣经、人物、归属道具与场景结构。
+system_prompt: prompts/system.md
+max_steps: 6
+tools:
+  - parse-script
+  - retrieve
+namespaces:
+  - script/craft/prompting

@@ -1,0 +1,13 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+apps/admin/dist
+apps/admin/node_modules
+docs
+*.md
+.env
+.env.local
+data
+.tmp

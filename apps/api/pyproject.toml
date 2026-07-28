@@ -1,0 +1,9 @@
+[project]
+name = "ai-platform-api"
+version = "0.1.0"
+description = "Enterprise LangChain AI Platform API (P0)"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uvicorn]
+factory = false

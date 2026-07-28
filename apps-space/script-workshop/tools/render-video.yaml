@@ -1,0 +1,11 @@
+id: render-video
+name: 生成分镜视频
+description: 调用 SD 视频能力，为视频提示词生成分镜视频。
+risk_level: medium
+entrypoint: src/tools.py:render_video
+parameters:
+  type: object
+  properties:
+    video_prompt_id:
+      type: string
+  required: [video_prompt_id]

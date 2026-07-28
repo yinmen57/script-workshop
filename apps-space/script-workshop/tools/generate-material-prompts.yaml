@@ -1,0 +1,11 @@
+id: generate-material-prompts
+name: 生成物料提示词
+description: 为项目内人物和归属道具生成一致性的物料提示词。
+risk_level: low
+entrypoint: src/tools.py:generate_material_prompts
+parameters:
+  type: object
+  properties:
+    project_id:
+      type: string
+  required: [project_id]

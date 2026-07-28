@@ -1,0 +1,6 @@
+name: 协调 Agent
+role: coordinator
+description: ReAct 路由，通过 handoff 委派专业 Agent 完成任务。
+system_prompt: prompts/system.md
+max_steps: 16
+tools: []

@@ -1,0 +1,13 @@
+id: parse-script
+name: 解析剧本
+description: 将剧本文本解析为风格圣经、人物、归属道具和场景结构。
+risk_level: low
+entrypoint: src/tools.py:parse_script
+parameters:
+  type: object
+  properties:
+    project_id:
+      type: string
+    script_text:
+      type: string
+  required: [project_id, script_text]

@@ -1,0 +1,11 @@
+name: 分镜规划 Agent
+role: specialist
+description: 规划分镜并生成视频提示词。
+system_prompt: prompts/system.md
+max_steps: 8
+tools:
+  - plan-shots
+  - retrieve
+namespaces:
+  - script/craft/prompting
+  - script/craft/cinematography
