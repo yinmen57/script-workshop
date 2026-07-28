@@ -17,6 +17,7 @@
 | [07-p0-build-steps.md](./07-p0-build-steps.md) | P0 平台建立顺序、验收标准与范围边界 |
 | [08-agent-framework-pivot.md](./08-agent-framework-pivot.md) | **定位修订**：收敛为 Agent 开发框架，框架与业务层分层、改造顺序 |
 | [../business-script-material/01-domain-design.md](../business-script-material/01-domain-design.md) | 剧本→物料→视频 垂直业务层设计（业务层文档，非框架交付物） |
+| [../business-script-material/04-narrative-space-and-dual-mode.md](../business-script-material/04-narrative-space-and-dual-mode.md) | **目标产品形态**：叙事空间四级维度 + 画布/对话双模式（业务层文档，修订 01 的领域模型与视频粒度） |
 
 ## 已锁定决策（摘要）
 
