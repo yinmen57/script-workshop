@@ -3,8 +3,12 @@
 > 本文是「哪些能吸收、怎么吸收、什么不碰」的唯一依据。  
 > 目标形态见 [04-narrative-space-and-dual-mode.md](./04-narrative-space-and-dual-mode.md)；实施顺序见 [05-dev-roadmap.md](./05-dev-roadmap.md)。
 
-参考仓库：`git@codeup.aliyun.com:62cd523611fc0f0c9e2b547c/script_material_library.git`，
-本地只读副本在 `D:\pro\_ref\script_material_library`（刻意放在本仓库之外，不进版本库）。
+参考仓库：`git@codeup.aliyun.com:62cd523611fc0f0c9e2b547c/script_material_library.git`
+
+| 用法 | 说明 |
+|------|------|
+| 本仓库 git remote | `script_material_library`（`git remote -v` 可见；`git fetch script_material_library`） |
+| 本地只读副本 | `D:\pro\_ref\script_material_library`（刻意放在本仓库之外，不进版本库） |
 
 ## 1. 结论
 
