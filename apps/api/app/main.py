@@ -18,14 +18,13 @@ from packages.infra.redis_client import close_redis
 async def lifespan(_: FastAPI):
     # 启动时强制加载配置；缺失必填项会直接失败
     get_settings()
-    from packages.business_script.schema import ensure_script_schema
     from packages.governance.agent_workspace_service import scan_all_workspaces
     from packages.governance.chat_service import ensure_chat_schema
     from packages.infra.db import get_session_factory
 
+    # 剧本业务表由 Alembic 管理，不再在启动时 ensure
     async with get_session_factory()() as session:
         await ensure_chat_schema(session)
-        await ensure_script_schema(session)
     scan_all_workspaces()
     yield
     await close_redis()

@@ -34,24 +34,8 @@
 
 ---
 
-## 带货的产品替换任务铁律
-
-本条只适用于 content_type 为 commerce 的脚本。把旧产品替换为新产品，是查找替换任务，不是重新创作任务。不能改变故事情节、不能增删场景、不能改变角色。
-五条硬约束：scenes 数组长度必须与原脚本完全相同；每个场景的 shot_number、duration、timestamp、shot_type 原样保留；roles 中 character、prop、scene、creature 类型的角色原样保留且 role_name 与 role_description 不能改；场景的整体叙事线与人物行为逻辑与原脚本一致；lighting 与 sound_effect 保持不变。
-执行替换时温度取 0.3 而不是常规生成的 0.7，降低模型自由发挥的空间。
-
----
-
-## 带货的产品替换操作范围
-
-本条只适用于 content_type 为 commerce 的脚本。需要改动的只有六处：roles 中 role_type 为 product 的条目改 role_name 与 role_description；title 改为包含新产品名的标题；每个场景中出现旧产品名的字段（character1_name、character2_name、scene_description、dialogue、character_action、storyboard_prompt、video_motion_prompt）替换为新产品名与描述；dialogue 围绕新产品卖点重写但模仿原脚本的语气与长度；storyboard_prompt 中涉及旧产品外观的描述改为新产品外观；character_action 在产品形态不同时微调持握与展示动作。
-不涉及产品的场景（开场空镜、角色情绪镜头）保持原文不变或仅做微调。原脚本中的宠物、配角等非产品角色必须原样保留。
-新产品品类与原产品不同时（如原产品是唇线笔、新产品是湿巾纸），合理调整持握方式、展示动作、使用场景，但场景数量和节奏不变。
-
----
-
 ## 多模态输入的模式差异
 
 从文字生成脚本时直接给出剧本内容即可。
-从参考视频生成脚本时，视频以 video_url 传入并设置 fps 为 1.0 抽帧。content_type 为 commerce 时还要提示模型：这是创作参考视频，用户将用自己的产品和角色替换原内容，所以 product 类型的 role 要用通用品类名而非视频中的具体品牌名。
+从参考视频生成脚本时，视频以 video_url 传入并设置 fps 为 1.0 抽帧。
 从角色图片生成脚本时，图片以 image_url 数组传入，模型需要根据角色外貌特征生成包含这些角色的分镜。

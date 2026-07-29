@@ -4,7 +4,6 @@ export type ScriptProject = {
   id: string;
   name: string;
   status: string;
-  content_type?: string | null;
   style_bible?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -17,6 +16,7 @@ export type CharacterAsset = {
   appearance_anchor: string;
   costume_baseline?: string;
   status: string;
+  record_status?: string;
 };
 
 export type PropAsset = {
@@ -28,6 +28,7 @@ export type PropAsset = {
   owner_name?: string | null;
   scope: string;
   status: string;
+  record_status?: string;
 };
 
 export type MaterialPrompt = {
@@ -38,6 +39,31 @@ export type MaterialPrompt = {
   negative_prompt?: string;
   version: number;
   status: string;
+  record_status?: string;
+};
+
+export type NarrativeSpace = {
+  id: string;
+  project_id: string;
+  episode_id: string;
+  ordinal: number;
+  title: string;
+  summary?: string;
+  time_place?: string;
+  source_text?: string;
+  estimated_duration_sec?: number | null;
+  status: string;
+  record_status?: string;
+};
+
+export type Episode = {
+  id: string;
+  project_id: string;
+  ordinal: number;
+  title: string;
+  status: string;
+  record_status?: string;
+  narrative_spaces: NarrativeSpace[];
 };
 
 export async function listScriptProjects() {
@@ -47,10 +73,7 @@ export async function listScriptProjects() {
   return data;
 }
 
-export async function createScriptProject(body: {
-  name: string;
-  content_type?: string;
-}) {
+export async function createScriptProject(body: { name: string }) {
   const { data } = await api.post<ScriptProject>("/script-biz/projects", body);
   return data;
 }
@@ -68,6 +91,7 @@ export async function parseScriptProject(
     project: ScriptProject;
     characters: CharacterAsset[];
     props: PropAsset[];
+    structure?: { items: Episode[]; total: number };
   }>(`/script-biz/projects/${projectId}/parse`, body);
   return data;
 }
@@ -81,16 +105,111 @@ export async function getScriptAssets(projectId: string) {
   return data;
 }
 
-export async function generateMaterialPrompts(projectId: string) {
-  const { data } = await api.post<{ items: MaterialPrompt[]; total: number }>(
-    `/script-biz/projects/${projectId}/material-prompts/generate`,
+export async function confirmScriptAsset(
+  projectId: string,
+  body: { target_type: "character" | "prop"; target_id: string },
+) {
+  const { data } = await api.post<{
+    project: ScriptProject;
+    characters: CharacterAsset[];
+    props: PropAsset[];
+  }>(`/script-biz/projects/${projectId}/assets/confirm`, body);
+  return data;
+}
+
+export async function getScriptStructure(projectId: string) {
+  const { data } = await api.get<{ items: Episode[]; total: number }>(
+    `/script-biz/projects/${projectId}/structure`,
   );
+  return data;
+}
+
+export async function parseScriptStructure(
+  projectId: string,
+  body?: { script_text?: string },
+) {
+  const { data } = await api.post<{
+    parsed: { episode_count: number; narrative_space_count: number };
+    structure: { items: Episode[]; total: number };
+  }>(`/script-biz/projects/${projectId}/structure/parse`, body || {});
+  return data;
+}
+
+export async function confirmNarrativeSpace(spaceId: string) {
+  const { data } = await api.post<NarrativeSpace>(
+    `/script-biz/narrative-spaces/${spaceId}/confirm`,
+  );
+  return data;
+}
+
+export type ShotPlan = {
+  id: string;
+  project_id: string;
+  narrative_space_id: string;
+  ordinal: number;
+  scene_text?: string;
+  beat?: string;
+  character_ids?: string[];
+  prop_ids?: string[];
+  camera?: Record<string, unknown> | null;
+  duration_sec?: number | null;
+  status: string;
+  record_status?: string;
+};
+
+export async function listShots(
+  projectId: string,
+  narrativeSpaceId?: string,
+) {
+  const { data } = await api.get<{ items: ShotPlan[]; total: number }>(
+    `/script-biz/projects/${projectId}/shots`,
+    { params: narrativeSpaceId ? { narrative_space_id: narrativeSpaceId } : {} },
+  );
+  return data;
+}
+
+export async function planProjectShots(projectId: string) {
+  const { data } = await api.post<{
+    spaces: unknown[];
+    space_count: number;
+    total: number;
+  }>(`/script-biz/projects/${projectId}/shots/plan`);
+  return data;
+}
+
+export async function planSpaceShots(spaceId: string) {
+  const { data } = await api.post<{
+    narrative_space_id: string;
+    items: ShotPlan[];
+    total: number;
+  }>(`/script-biz/narrative-spaces/${spaceId}/shots/plan`);
+  return data;
+}
+
+export async function confirmShot(shotId: string) {
+  const { data } = await api.post<ShotPlan>(`/script-biz/shots/${shotId}/confirm`);
+  return data;
+}
+
+export async function generateMaterialPrompts(projectId: string) {
+  const { data } = await api.post<{
+    items: MaterialPrompt[];
+    total: number;
+    skipped_confirmed?: number;
+  }>(`/script-biz/projects/${projectId}/material-prompts/generate`);
   return data;
 }
 
 export async function listMaterialPrompts(projectId: string) {
   const { data } = await api.get<{ items: MaterialPrompt[]; total: number }>(
     `/script-biz/projects/${projectId}/material-prompts`,
+  );
+  return data;
+}
+
+export async function confirmMaterialPrompt(projectId: string, promptId: string) {
+  const { data } = await api.post<MaterialPrompt>(
+    `/script-biz/projects/${projectId}/material-prompts/${promptId}/confirm`,
   );
   return data;
 }

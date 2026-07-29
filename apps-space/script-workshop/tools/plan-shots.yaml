@@ -1,11 +1,13 @@
 id: plan-shots
 name: 规划分镜
-description: 基于已确认资产与场景生成分镜计划。
+description: 基于已确认资产与叙事空间生成分镜计划。可指定 narrative_space_id；缺省则规划项目下尚未有确认分镜的全部叙事空间。
 risk_level: low
 entrypoint: src/tools.py:plan_shots
 parameters:
   type: object
   properties:
     project_id:
+      type: string
+    narrative_space_id:
       type: string
   required: [project_id]

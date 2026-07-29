@@ -8,16 +8,16 @@ shot_number 镜号、duration 时长、scene_description 画面描述、characte
 
 ## 脚本 JSON 的顶层结构
 
-脚本必须是包含 title、content_type、roles、scenes 四个顶层字段的 JSON 对象：
-title 为脚本标题；content_type 为内容类型枚举，取值 narration_comic 或 commerce，判定规则见内容类型机制条目；roles 为需要独立视觉参考的实体数组；scenes 为镜头数组。
+脚本必须是包含 title、roles、scenes 三个顶层字段的 JSON 对象：
+title 为脚本标题；roles 为需要独立视觉参考的实体数组；scenes 为镜头数组。
 输出时严格只返回 JSON，不要添加任何额外说明文字，不要用 markdown 代码块包裹。roles 中每个元素含 role_name、role_type、role_description；scenes 中每个元素含 17 个标准字段加 timestamp。
 
 ---
 
 ## scenes 的时长与时间轴规则
 
-duration 是秒数，粒度到 0.5 秒，允许一位小数；timestamp 是该场景的起始秒数，从 0 开始按前序场景 duration 累加，即 timestamp(n) = timestamp(n-1) + duration(n-1)，同样允许小数。这两条是通用规则。
-duration 的取值区间和整片镜头数按 content_type 分别规定，只查该类型专属条目。narration_comic 查解说漫节奏条目；commerce 的节奏口径尚未整理，不得套用解说漫数值，应标记 needs_review。
+duration 是秒数，粒度到 0.5 秒，允许一位小数；timestamp 是该场景的起始秒数，从 0 开始按前序场景 duration 累加，即 timestamp(n) = timestamp(n-1) + duration(n-1)，同样允许小数。
+duration 取值区间与整片镜头数见镜头语言中的节奏条目：单镜 1.5 到 4 秒、2 秒为基准，一集约 32 到 43 个镜头。
 duration 是分镜的叙事时长，不是一次视频生成任务的时长。视频模型支持一次生成包含多个镜头，连续分镜会按场景与角色一致的条件打包成镜头组再提交，分组规则见镜头语言部分。
 
 ---
@@ -25,7 +25,6 @@ duration 是分镜的叙事时长，不是一次视频生成任务的时长。�
 ## 场景与角色的引用一致性
 
 scenes 中的 character1_name 与 character2_name 必须与 roles 数组里的 role_name 完全一致，不能出现 roles 中不存在的名字。
-当某个 product 类型的角色（商品）在该场景中被展示时，要把商品名写入 character1_name 或 character2_name 来建立引用关系。
 scene_description 需要清晰交代该场景出现了哪些角色和物品，以及它们之间的互动关系。
 character1_description 用于写该角色在这一场景中的特定状态（换装、特定姿态），而不是重复 roles 里的通用外貌描述。
 

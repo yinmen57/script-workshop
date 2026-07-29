@@ -17,6 +17,9 @@ COPY packages /app/packages
 COPY apps/api /app/apps/api
 # Agent 应用空间与 API 镜像一起发布；本地 compose 可挂载覆盖并以 mtime 热重载
 COPY apps-space /app/apps-space
+# 剧本业务表迁移
+COPY alembic.ini /app/alembic.ini
+COPY alembic /app/alembic
 
 WORKDIR /app/apps/api
 

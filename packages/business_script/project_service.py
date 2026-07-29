@@ -11,8 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.domain.errors import NotFoundError, ValidationAppError
 from packages.domain.ids import new_id
 
-_VALID_CONTENT_TYPES = {"narration_comic", "commerce"}
-
 
 def _json_load(value: Any) -> Any:
     if value is None:
@@ -28,7 +26,6 @@ def _project_public(row: dict[str, Any]) -> dict[str, Any]:
         "tenant_id": row["tenant_id"],
         "name": row["name"],
         "status": row["status"],
-        "content_type": row.get("content_type"),
         "style_bible": _json_load(row.get("style_bible")),
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
         "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
@@ -56,18 +53,14 @@ async def create_project(session: AsyncSession, tenant_id: str, payload: dict) -
     name = (payload.get("name") or "").strip()
     if not name:
         raise ValidationAppError("name required")
-    content_type = payload.get("content_type")
-    if content_type is not None:
-        if content_type not in _VALID_CONTENT_TYPES:
-            raise ValidationAppError("content_type 必须是 narration_comic 或 commerce")
     project_id = new_id("sprj")
     await session.execute(
         text(
             """
             INSERT INTO script_project
-              (id, tenant_id, name, status, content_type, style_bible)
+              (id, tenant_id, name, status, style_bible)
             VALUES
-              (:id, :tenant_id, :name, :status, :content_type, :style_bible)
+              (:id, :tenant_id, :name, :status, :style_bible)
             """
         ),
         {
@@ -75,7 +68,6 @@ async def create_project(session: AsyncSession, tenant_id: str, payload: dict) -
             "tenant_id": tenant_id,
             "name": name,
             "status": "draft",
-            "content_type": content_type,
             "style_bible": None,
         },
     )

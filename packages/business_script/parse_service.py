@@ -1,4 +1,9 @@
-"""剧本解析：落文档、调 Chat、沉淀人物与道具资产。"""
+"""剧本解析：规则切结构 + LLM 抽语义资产。
+
+1. structure_parser 规则切集 / 叙事空间（D6），不进 LLM；
+2. Chat 只抽 style_bible / 人物 / 道具；
+重跑只清理 record_status=ai；confirmed 永不覆盖（D5）。
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,15 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.business_script import keys, llm, project_service
-from packages.domain.errors import ValidationAppError
+from packages.business_script import (
+    keys,
+    knowledge_context,
+    llm,
+    project_service,
+    structure_service,
+)
+from packages.domain.errors import NotFoundError, ValidationAppError
 from packages.domain.ids import new_id
-
-_VALID_CONTENT_TYPES = {"narration_comic", "commerce"}
 
 
 def _as_list(value: Any) -> list:
@@ -27,7 +36,7 @@ async def parse_project(
     script_text: str | None = None,
     title: str | None = None,
 ) -> dict:
-    await project_service.require_project(session, tenant_id, project_id)
+    project = await project_service.require_project(session, tenant_id, project_id)
 
     if script_text and script_text.strip():
         doc = await project_service.add_script(
@@ -53,23 +62,44 @@ async def parse_project(
     )
     await session.commit()
 
-    template = llm.load_prompt("agents/parser/prompts/parse-script.md")
-    user_prompt = llm.render_prompt(template, script_text=doc["raw_text"])
     try:
+        # 先规则切结构并落库；LLM 失败时结构仍保留
+        structure_bundle = await structure_service.parse_and_sync_structure(
+            session, tenant_id, project_id, doc["raw_text"]
+        )
+        await session.commit()
+
+        craft = await knowledge_context.assemble_parse_knowledge(tenant_id=tenant_id)
+        system_prompt = llm.load_prompt("agents/parser/prompts/system.md")
+        if craft:
+            system_prompt = (
+                system_prompt
+                + "\n\n以下是已检索到的工艺规范（硬性约束，冲突时以之为准）：\n"
+                + craft
+            )
+        system_prompt += (
+            "\n\n你必须只输出符合 parse-script 模板的 JSON，"
+            "不要 markdown 说明，不要额外字段。"
+            "不要输出 scenes：集与叙事空间已由规则解析完成。"
+        )
+
+        template = llm.load_prompt("agents/parser/prompts/parse-script.md")
+        # 超长剧本只把 preamble + 各集摘要与现身角色送给资产抽取，控制 token
+        asset_text = _asset_extract_text(doc["raw_text"], structure_bundle)
+        user_prompt = llm.render_prompt(template, script_text=asset_text)
         parsed = await llm.chat_json(
             [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是剧本解析器。只输出符合 schema 的 JSON，"
-                        "不要 markdown 说明，不要额外字段。"
-                    ),
-                },
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
         )
         result = await _persist_parse(
-            session, tenant_id, project_id, doc["id"], parsed
+            session,
+            tenant_id,
+            project_id,
+            doc["id"],
+            parsed,
+            structure_bundle=structure_bundle,
         )
     except Exception as exc:  # noqa: BLE001
         await session.execute(
@@ -95,25 +125,56 @@ async def parse_project(
     return result
 
 
+def _asset_extract_text(_raw_text: str, structure_bundle: dict[str, Any]) -> str:
+    """为人物/道具抽取准备输入：preamble（含 Core Characters）+ 各集元数据与空间目录。"""
+    parsed = (structure_bundle or {}).get("parsed") or {}
+    parts: list[str] = []
+    preamble = (parsed.get("preamble") or "").strip()
+    if preamble:
+        parts.append(preamble)
+    for ep in parsed.get("episodes") or []:
+        block = [
+            f"剧集 [{ep.get('ordinal')}]",
+            f"标题: {ep.get('title') or ''}",
+            f"现身角色: {ep.get('characters') or ''}",
+            f"时间: {ep.get('time') or ''}",
+            f"位置: {ep.get('location') or ''}",
+            f"氛围: {ep.get('mood') or ''}",
+            f"情节梗概: {ep.get('summary') or ''}",
+            "叙事空间:",
+        ]
+        for ns in ep.get("narrative_spaces") or []:
+            block.append(
+                f"- {ns.get('ordinal')}: {ns.get('title')}"
+                f" | {ns.get('time_place') or ''}"
+                f" | 约 {ns.get('estimated_duration_sec') or '?'}s"
+            )
+            summary = (ns.get("summary") or "").strip()
+            if summary:
+                block.append(f"  摘要: {summary}")
+        parts.append("\n".join(block))
+    text = "\n\n".join(parts).strip()
+    if not text:
+        raise ValidationAppError("结构解析结果为空，无法抽取人物与道具")
+    return text
+
+
 async def _persist_parse(
     session: AsyncSession,
     tenant_id: str,
     project_id: str,
     document_id: str,
     parsed: dict[str, Any],
+    *,
+    structure_bundle: dict[str, Any],
 ) -> dict:
-    content_type = parsed.get("content_type")
-    if content_type not in _VALID_CONTENT_TYPES:
-        raise ValidationAppError("content_type 必须是 narration_comic 或 commerce")
     style_bible = parsed.get("style_bible")
     if not isinstance(style_bible, dict):
         raise ValidationAppError("style_bible 必须是对象")
 
     characters = _as_list(parsed.get("characters"))
     props = _as_list(parsed.get("props"))
-    scenes = _as_list(parsed.get("scenes"))
 
-    # 同名人物合并
     char_by_key: dict[str, dict[str, Any]] = {}
     for item in characters:
         if not isinstance(item, dict):
@@ -136,34 +197,77 @@ async def _persist_parse(
             if len((item.get("appearance_anchor") or "")) > len(
                 existing["appearance_anchor"]
             ):
-                existing["appearance_anchor"] = (item.get("appearance_anchor") or "").strip()
+                existing["appearance_anchor"] = (
+                    item.get("appearance_anchor") or ""
+                ).strip()
             if len((item.get("costume_baseline") or "")) > len(
                 existing.get("costume_baseline") or ""
             ):
-                existing["costume_baseline"] = (item.get("costume_baseline") or "").strip()
+                existing["costume_baseline"] = (
+                    item.get("costume_baseline") or ""
+                ).strip()
 
-    # 清空旧资产后按本次解析重建（B0：以最新解析为准）
+    # D5：只删 AI 产物；confirmed 资产与其物料提示词保留
     await session.execute(
         text(
-            "DELETE FROM material_prompt WHERE project_id = :project_id AND tenant_id = :tenant_id"
+            """
+            DELETE FROM material_prompt
+            WHERE project_id = :project_id AND tenant_id = :tenant_id
+              AND record_status = 'ai'
+            """
         ),
         {"project_id": project_id, "tenant_id": tenant_id},
     )
     await session.execute(
         text(
-            "DELETE FROM prop_asset WHERE project_id = :project_id AND tenant_id = :tenant_id"
+            """
+            DELETE FROM prop_asset
+            WHERE project_id = :project_id AND tenant_id = :tenant_id
+              AND record_status = 'ai'
+            """
         ),
         {"project_id": project_id, "tenant_id": tenant_id},
     )
+    # 仍被 confirmed 道具引用的人物即使是 ai 也不删，避免孤儿引用
     await session.execute(
         text(
-            "DELETE FROM character_asset WHERE project_id = :project_id AND tenant_id = :tenant_id"
+            """
+            DELETE FROM character_asset
+            WHERE project_id = :project_id AND tenant_id = :tenant_id
+              AND record_status = 'ai'
+              AND id NOT IN (
+                SELECT owner_character_id FROM (
+                  SELECT owner_character_id FROM prop_asset
+                  WHERE project_id = :project_id AND tenant_id = :tenant_id
+                    AND record_status = 'confirmed'
+                    AND owner_character_id IS NOT NULL
+                ) AS keep_owners
+              )
+            """
         ),
         {"project_id": project_id, "tenant_id": tenant_id},
     )
 
-    char_id_by_key: dict[str, str] = {}
+    confirmed_chars = (
+        await session.execute(
+            text(
+                """
+                SELECT id, character_key FROM character_asset
+                WHERE project_id = :project_id AND tenant_id = :tenant_id
+                  AND record_status = 'confirmed'
+                """
+            ),
+            {"project_id": project_id, "tenant_id": tenant_id},
+        )
+    ).mappings().all()
+    char_id_by_key: dict[str, str] = {
+        r["character_key"]: r["id"] for r in confirmed_chars
+    }
+
     for item in char_by_key.values():
+        if item["character_key"] in char_id_by_key:
+            # confirmed 人物跳过，不覆盖
+            continue
         if not item["appearance_anchor"]:
             item["appearance_anchor"] = item["name"]
         cid = new_id("schar")
@@ -173,10 +277,10 @@ async def _persist_parse(
                 """
                 INSERT INTO character_asset
                   (id, tenant_id, project_id, name, character_key, appearance_anchor,
-                   costume_baseline, personality_tags, status)
+                   costume_baseline, personality_tags, status, record_status)
                 VALUES
                   (:id, :tenant_id, :project_id, :name, :character_key, :appearance_anchor,
-                   :costume_baseline, CAST(:personality_tags AS JSON), :status)
+                   :costume_baseline, CAST(:personality_tags AS JSON), :status, 'ai')
                 """
             ),
             {
@@ -193,6 +297,22 @@ async def _persist_parse(
                 "status": item["status"],
             },
         )
+
+    confirmed_prop_keys = {
+        r["prop_key"]
+        for r in (
+            await session.execute(
+                text(
+                    """
+                    SELECT prop_key FROM prop_asset
+                    WHERE project_id = :project_id AND tenant_id = :tenant_id
+                      AND record_status = 'confirmed'
+                    """
+                ),
+                {"project_id": project_id, "tenant_id": tenant_id},
+            )
+        ).mappings().all()
+    }
 
     prop_by_key: dict[str, dict[str, Any]] = {}
     for item in props:
@@ -213,6 +333,8 @@ async def _persist_parse(
         pk = (item.get("prop_key") or "").strip() or keys.prop_key(
             owner_key, prop_type, prop_name
         )
+        if pk in confirmed_prop_keys:
+            continue
         visual = (item.get("visual_anchor") or "").strip() or prop_name
         scope = (item.get("scope") or ("owned" if owner_id else "scene")).strip()
         existing = prop_by_key.get(pk)
@@ -233,10 +355,10 @@ async def _persist_parse(
                 """
                 INSERT INTO prop_asset
                   (id, tenant_id, project_id, owner_character_id, prop_key, prop_type,
-                   prop_name, visual_anchor, scope, status)
+                   prop_name, visual_anchor, scope, status, record_status)
                 VALUES
                   (:id, :tenant_id, :project_id, :owner_character_id, :prop_key, :prop_type,
-                   :prop_name, :visual_anchor, :scope, :status)
+                   :prop_name, :visual_anchor, :scope, :status, 'ai')
                 """
             ),
             {
@@ -257,8 +379,7 @@ async def _persist_parse(
         text(
             """
             UPDATE script_project
-            SET content_type = :content_type,
-                style_bible = CAST(:style_bible AS JSON),
+            SET style_bible = CAST(:style_bible AS JSON),
                 status = 'parsed'
             WHERE id = :id AND tenant_id = :tenant_id
             """
@@ -266,9 +387,11 @@ async def _persist_parse(
         {
             "id": project_id,
             "tenant_id": tenant_id,
-            "content_type": content_type,
             "style_bible": json.dumps(style_bible, ensure_ascii=False),
         },
+    )
+    structure = structure_bundle.get("structure") or await structure_service.list_structure(
+        session, tenant_id, project_id
     )
     await session.execute(
         text(
@@ -284,18 +407,21 @@ async def _persist_parse(
             "tenant_id": tenant_id,
             "parse_result": json.dumps(
                 {
-                    "content_type": content_type,
                     "style_bible": style_bible,
                     "characters": list(char_by_key.values()),
                     "props": list(prop_by_key.values()),
-                    "scenes": scenes,
+                    "structure_stats": structure_bundle.get("parsed"),
+                    "structure": structure,
                 },
                 ensure_ascii=False,
             ),
         },
     )
     await session.commit()
-    return await get_assets(session, tenant_id, project_id)
+    result = await get_assets(session, tenant_id, project_id)
+    result["structure"] = structure
+    result["structure_stats"] = structure_bundle.get("parsed")
+    return result
 
 
 async def get_assets(session: AsyncSession, tenant_id: str, project_id: str) -> dict:
@@ -341,6 +467,7 @@ async def get_assets(session: AsyncSession, tenant_id: str, project_id: str) -> 
                 if isinstance(r.get("personality_tags"), str)
                 else (r.get("personality_tags") or []),
                 "status": r["status"],
+                "record_status": r.get("record_status") or "ai",
             }
             for r in chars
         ],
@@ -355,7 +482,41 @@ async def get_assets(session: AsyncSession, tenant_id: str, project_id: str) -> 
                 "owner_name": r.get("owner_name"),
                 "scope": r["scope"],
                 "status": r["status"],
+                "record_status": r.get("record_status") or "ai",
             }
             for r in props
         ],
     }
+
+
+async def confirm_asset(
+    session: AsyncSession,
+    tenant_id: str,
+    project_id: str,
+    *,
+    target_type: str,
+    target_id: str,
+) -> dict:
+    """将人物或道具标记为人工确认，重解析不再覆盖。"""
+    await project_service.require_project(session, tenant_id, project_id)
+    if target_type == "character":
+        table = "character_asset"
+    elif target_type == "prop":
+        table = "prop_asset"
+    else:
+        raise ValidationAppError("target_type 必须是 character 或 prop")
+
+    result = await session.execute(
+        text(
+            f"""
+            UPDATE {table}
+            SET record_status = 'confirmed'
+            WHERE id = :id AND project_id = :project_id AND tenant_id = :tenant_id
+            """
+        ),
+        {"id": target_id, "project_id": project_id, "tenant_id": tenant_id},
+    )
+    if result.rowcount == 0:
+        raise NotFoundError(f"{target_type} not found")
+    await session.commit()
+    return await get_assets(session, tenant_id, project_id)

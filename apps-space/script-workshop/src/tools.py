@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from packages.business_script import material_service, parse_service
+from packages.business_script import material_service, parse_service, shot_service
 from packages.core.tool_context import require_tenant_id
 from packages.infra.db import get_session_factory
 
 
 async def parse_script(project_id: str, script_text: str) -> dict[str, Any]:
-    """B0：解析剧本并创建人物、归属道具和场景资产。"""
+    """解析剧本并创建人物、归属道具；结构由规则切分。"""
     tenant_id = require_tenant_id()
     async with get_session_factory()() as session:
         return await parse_service.parse_project(
@@ -25,7 +25,7 @@ async def parse_script(project_id: str, script_text: str) -> dict[str, Any]:
 
 
 async def generate_material_prompts(project_id: str) -> dict[str, Any]:
-    """B0：为人物和归属道具生成可编辑的物料提示词。"""
+    """为人物和归属道具生成可编辑的物料提示词。"""
     tenant_id = require_tenant_id()
     async with get_session_factory()() as session:
         return await material_service.generate_material_prompts(
@@ -33,10 +33,19 @@ async def generate_material_prompts(project_id: str) -> dict[str, Any]:
         )
 
 
-async def plan_shots(project_id: str) -> dict[str, Any]:
-    """B1：根据已确认资产规划分镜。"""
-    del project_id
-    raise NotImplementedError("plan_shots 属于 B1，尚未实现")
+async def plan_shots(
+    project_id: str, narrative_space_id: str | None = None
+) -> dict[str, Any]:
+    """按叙事空间规划分镜；缺省 narrative_space_id 时规划项目下全部待规划空间。"""
+    tenant_id = require_tenant_id()
+    async with get_session_factory()() as session:
+        if narrative_space_id:
+            return await shot_service.plan_shots_for_space(
+                session, tenant_id, narrative_space_id
+            )
+        return await shot_service.plan_shots_for_project(
+            session, tenant_id, project_id
+        )
 
 
 async def render_material_image(material_prompt_id: str) -> dict[str, Any]:

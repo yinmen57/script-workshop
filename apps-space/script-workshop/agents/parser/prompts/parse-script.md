@@ -1,12 +1,12 @@
-任务：解析以下剧本，并只输出 JSON。
+任务：从以下剧本材料中提取风格圣经、人物与归属道具，并只输出 JSON。
+集与叙事空间已由规则解析完成，不要输出 scenes。
 
-剧本：
+材料：
 {script_text}
 
 输出 Schema：
 ```json
 {
-  "content_type": "narration_comic",
   "style_bible": {
     "era": "",
     "visual_style": "",
@@ -33,11 +33,8 @@
       "visual_anchor": "",
       "status": "ready"
     }
-  ],
-  "scenes": [
-    {"ordinal": 1, "name": "", "summary": "", "characters": [], "props": []}
   ]
 }
 ```
 
-规则：`content_type` 只能是 `narration_comic` 或 `commerce`，先判定类型再提取资产；`character_key` 由人物名规范化得到；`prop_key` 必须包含归属、类型和名称。归属无法关联到人物时填 `owner_name: null`、`status: "needs_review"`。
+规则：`character_key` 由人物名规范化得到；`prop_key` 必须包含归属、类型和名称。归属无法关联到人物时填 `owner_name: null`、`status: "needs_review"`。

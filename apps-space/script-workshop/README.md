@@ -28,11 +28,9 @@ script-workshop/
 
 | namespace | 内容 |
 | --- | --- |
-| `script/craft/prompting` | 内容类型机制、脚本 17 字段、roles 提取口径、提示词模板、产品替换铁律 |
-| `script/craft/cinematography` | 景别、机位、构图、运镜、按 content_type 区分的节奏 |
+| `script/craft/prompting` | 脚本结构、roles 提取口径、提示词模板、一致性锁定 |
+| `script/craft/cinematography` | 景别、机位、构图、运镜、节奏 |
 | `script/craft/visual-style` | 生图/生视频参数规范、光影调色、内容安全红线 |
-
-内容类型：`content_type` 为脚本顶层字段，取值 `narration_comic`（解说漫）或 `commerce`（带货，含种草/测评/开箱）。标题含「解说漫」或「带货」的知识条目为类型专属，其余为通用；检索查询须带类型中文名，禁止跨类型套用。
 
 索引（改语料后重跑，条目内容不变时为覆盖写入）：
 

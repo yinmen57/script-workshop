@@ -4,11 +4,11 @@
 namespaces:
   - namespace: script/craft/prompting
     dir: craft-prompting
-    description: 内容类型机制、分镜脚本结构、roles 提取规则、提示词模板与产品替换铁律
+    description: 分镜脚本结构、roles 提取规则、提示词模板与一致性锁定
 
   - namespace: script/craft/cinematography
     dir: craft-cinematography
-    description: 景别、机位、构图、运镜与按内容类型区分的节奏口径
+    description: 景别、机位、构图、运镜与节奏口径
 
   - namespace: script/craft/visual-style
     dir: craft-visual-style

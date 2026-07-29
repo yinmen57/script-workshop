@@ -1,12 +1,9 @@
-任务：根据剧本场景规划分镜。
-
-内容类型：
-{content_type}
+任务：根据叙事空间正文规划分镜（成片单位已由规则切好，本任务只出镜头级描述）。
 
 风格圣经：
 {style_bible}
 
-场景：
+叙事空间：
 {scene}
 
 可用人物资产：
@@ -22,14 +19,18 @@
     {
       "ordinal": 1,
       "beat": "",
-      "camera": "",
+      "scene_text": "",
+      "camera": {"shot_type": "", "description": ""},
       "character_keys": [],
       "prop_keys": [],
-      "duration_sec": 5
+      "duration_sec": 2
     }
   ]
 }
 ```
 
-每个分镜只能引用当前场景内已确认的人物和道具资产，镜头描述必须与 `style_bible.camera_language` 一致。
-`duration_sec` 与整场镜头密度必须符合 `content_type` 对应的类型专属节奏；commerce 节奏未就绪时不要编造数值。
+规则：
+- 每个分镜只能引用上方资产列表里的 `character_key` / `prop_key`；
+- `camera.shot_type` 使用标准景别（近景、特写、中景、全景、大远景、俯拍、仰拍）；
+- 镜头描述须与 `style_bible.camera_language` 一致；
+- `duration_sec` 通常 1.5–4 秒（2 秒为基准）；全部分镜时长之和不得超过叙事空间的 `estimated_duration_sec`（若有，且通常 ≤15 秒）。
