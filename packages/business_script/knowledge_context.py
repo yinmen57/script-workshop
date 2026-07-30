@@ -68,6 +68,19 @@ async def assemble_parse_knowledge(*, tenant_id: str) -> str:
     return "## 资产提取口径\n" + roles
 
 
+async def assemble_segment_knowledge(*, tenant_id: str) -> str:
+    """叙事切分：场景边界与叙事结构口径。"""
+    text = await retrieve_craft(
+        tenant_id=tenant_id,
+        namespaces=[CRAFT_PROMPTING, CRAFT_CINEMA],
+        query="叙事结构 场景边界 换场 转场 情绪转折 一场戏的完整性",
+        top_k=6,
+    )
+    if not text:
+        return ""
+    return "## 叙事切分规范\n" + text
+
+
 async def assemble_material_knowledge(*, tenant_id: str) -> str:
     """物料提示词生成：prompting + visual-style。"""
     text = await retrieve_craft(
@@ -92,3 +105,16 @@ async def assemble_shot_knowledge(*, tenant_id: str) -> str:
     if not text:
         return ""
     return "## 分镜规范\n" + text
+
+
+async def assemble_video_knowledge(*, tenant_id: str) -> str:
+    """成片视频提示词：多镜合并写法 + 运镜与时长。"""
+    text = await retrieve_craft(
+        tenant_id=tenant_id,
+        namespaces=[CRAFT_CINEMA, CRAFT_PROMPTING, CRAFT_VISUAL],
+        query="镜头组 成片 视频提示词 运镜 切换 时长 一致性锁定",
+        top_k=6,
+    )
+    if not text:
+        return ""
+    return "## 成片视频规范\n" + text

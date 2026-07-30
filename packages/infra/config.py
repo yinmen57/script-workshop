@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     qdrant_port: int = 6333
     qdrant_api_key: str = ""
 
-    # 阿里云 OSS（S3 兼容）
+    # 阿里云 OSS（官方 oss2 SDK）
     oss_enabled: bool = True
     oss_endpoint: str = Field(..., min_length=1)
     oss_bucket: str = Field(..., min_length=1)
@@ -63,6 +63,10 @@ class Settings(BaseSettings):
 
     queue_backend: str = "redis_stream"
     queue_stream_key: str = "ai_platform:ingest"
+    # 剧本业务作业 Stream（第三段 Worker 消费）
+    script_job_stream_key: str = "ai_platform:script_jobs"
+    script_job_group: str = "script-workers"
+    script_job_consumer_prefix: str = "worker"
 
     xinference_base_url: str = "http://127.0.0.1:9997"
     xinference_embedding_model_uid: str = "bge-m3"
@@ -76,7 +80,30 @@ class Settings(BaseSettings):
     # 多 Agent 应用总空间：一级目录对应一个应用空间
     agent_workspace_root: str = "apps-space"
 
-    @field_validator("oss_endpoint", "oss_sts_endpoint", "oss_public_base_url", mode="before")
+    # 赏舞（sd-2-c）开放 API：生图 / 生视频
+    sd_enabled: bool = False
+    sd_base_url: str = ""
+    sd_api_key: str = ""
+    sd_image_model: str = "doubao-seedream-5-0-260128"
+    sd_video_model: str = "doubao-seedance-2-0-260128"
+    sd_resolution: str = "2K"
+    sd_character_size: str = "3:4"
+    sd_three_view_size: str = "16:9"
+    sd_character_view_size: str = "21:9"
+    sd_background_size: str = "16:9"
+    sd_request_timeout_seconds: int = 60
+    sd_poll_interval_seconds: int = 3
+    sd_poll_timeout_seconds: int = 300
+    sd_video_duration: int = -1
+    sd_video_resolution: str = "480p"
+    sd_video_ratio: str = "adaptive"
+    sd_video_poll_interval_seconds: int = 5
+    sd_video_poll_timeout_seconds: int = 600
+    sd_portrait_poll_interval_seconds: int = 5
+    sd_portrait_poll_timeout_seconds: int = 300
+    sd_portrait_wait_on_submit: bool = True
+
+    @field_validator("oss_endpoint", "oss_sts_endpoint", "oss_public_base_url", "sd_base_url", mode="before")
     @classmethod
     def strip_str(cls, v: object) -> object:
         if isinstance(v, str):
@@ -84,8 +111,13 @@ class Settings(BaseSettings):
         return v
 
     @property
+    def sd_resolution_norm(self) -> str:
+        """生图分辨率规范为小写（2k / 3k）。"""
+        return (self.sd_resolution or "2k").strip().lower()
+
+    @property
     def oss_endpoint_url(self) -> str:
-        """boto3 用的 endpoint，补全 https://。"""
+        """oss2 Endpoint，补全 https://。"""
         ep = self.oss_endpoint.rstrip("/")
         if ep.startswith("http://") or ep.startswith("https://"):
             return ep

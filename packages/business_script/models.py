@@ -181,6 +181,11 @@ class SceneSpace(Base):
 
 
 class NarrativeSpace(Base):
+    """叙事空间：语义完整的一段戏，长度不受模型上限约束。
+
+    成片切分下沉到 video_segment；本层只回答「哪里该断开成另一段戏」。
+    """
+
     __tablename__ = "narrative_space"
     __table_args__ = (
         UniqueConstraint("episode_id", "ordinal", name="uq_ns_ordinal"),
@@ -200,6 +205,46 @@ class NarrativeSpace(Base):
     time_place: Mapped[str | None] = mapped_column(String(512), nullable=True)
     source_text: Mapped[str | None] = mapped_column(MEDIUMTEXT, nullable=True)
     estimated_duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 语义切分产物：节拍类型 / 氛围 / 断开理由；segment_source 区分规则与 LLM
+    beat_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    mood: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    boundary_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    segment_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="rule"
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="draft")
+    record_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="ai"
+    )
+    created_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)
+    updated_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)
+
+
+class VideoSegment(Base):
+    """视频片段：叙事空间内的成片生成单元，单段不超过模型上限（15 秒）。
+
+    由该空间连续若干分镜聚合而成，是 video_prompt / video_job 的挂载层。
+    """
+
+    __tablename__ = "video_segment"
+    __table_args__ = (
+        UniqueConstraint(
+            "narrative_space_id", "ordinal", name="uq_video_segment_ordinal"
+        ),
+        Index("idx_video_segment_ns", "tenant_id", "narrative_space_id"),
+        Index("idx_video_segment_project", "tenant_id", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    narrative_space_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(256), nullable=False, server_default="")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    shot_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    source_text: Mapped[str | None] = mapped_column(MEDIUMTEXT, nullable=True)
+    duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="draft")
     record_status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default="ai"
@@ -296,20 +341,25 @@ class MaterialImage(Base):
 
 
 class VideoPrompt(Base):
-    """叙事空间成片提示词：一空间一段（D1）。"""
+    """成片提示词：一视频片段一段（D1）。
+
+    narrative_space_id 为冗余列，便于按空间聚合查询。
+    """
 
     __tablename__ = "video_prompt"
     __table_args__ = (
         UniqueConstraint(
-            "narrative_space_id", "version", name="uq_video_prompt_ns_ver"
+            "video_segment_id", "version", name="uq_video_prompt_seg_ver"
         ),
         Index("idx_video_prompt_project", "tenant_id", "project_id"),
         Index("idx_video_prompt_ns", "tenant_id", "narrative_space_id"),
+        Index("idx_video_prompt_segment", "tenant_id", "video_segment_id"),
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
     project_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    video_segment_id: Mapped[str] = mapped_column(String(32), nullable=False)
     narrative_space_id: Mapped[str] = mapped_column(String(32), nullable=False)
     prompt_text: Mapped[str] = mapped_column(MEDIUMTEXT, nullable=False)
     negative_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -366,4 +416,62 @@ class CanvasSnapshot(Base):
     viewport: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     created_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)
+    updated_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)
+
+
+class VideoJob(Base):
+    """视频片段成片任务：挂 video_prompt_id，一片段一任务。"""
+
+    __tablename__ = "video_job"
+    __table_args__ = (
+        Index("idx_video_job_project", "tenant_id", "project_id"),
+        Index("idx_video_job_prompt", "tenant_id", "video_prompt_id"),
+        Index("idx_video_job_ns", "tenant_id", "narrative_space_id"),
+        Index("idx_video_job_segment", "tenant_id", "video_segment_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    video_prompt_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    video_segment_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    narrative_space_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="queued")
+    oss_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    result_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    generation_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)
+    finished_at: Mapped[datetime | None] = mapped_column(_DT, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)
+
+
+class JobRun(Base):
+    """剧本业务后台作业：投递 / 去重 / 状态机（第三段）。"""
+
+    __tablename__ = "job_run"
+    __table_args__ = (
+        Index("idx_job_run_project", "tenant_id", "project_id", "created_at"),
+        Index("idx_job_run_dedupe", "tenant_id", "project_id", "dedupe_key", "status"),
+        Index("idx_job_run_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False, server_default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="queued")
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)
+    started_at: Mapped[datetime | None] = mapped_column(_DT, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(_DT, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(_DT, nullable=False, server_default=_TS)

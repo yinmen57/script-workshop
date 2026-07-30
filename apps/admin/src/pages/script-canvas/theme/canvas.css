@@ -1,0 +1,80 @@
+/* 叙事空间画布：仅保留 RF 连接点 / 边线 / 画布底必要样式 */
+
+.script-canvas-flow {
+  --canvas-brand: #6962ff;
+  --canvas-connection: #2f80ed;
+  --canvas-handle-size: 14px;
+  --xy-background-color: #fcfcfc;
+  background: #fcfcfc;
+}
+
+.script-canvas-flow .react-flow__node {
+  overflow: visible !important;
+}
+
+.script-canvas-flow .react-flow__edge-path.script-canvas-edge {
+  stroke: var(--canvas-connection);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 8 5;
+  animation: script-canvas-edge-flow 1.1s linear infinite;
+  fill: none;
+}
+
+.script-canvas-flow .react-flow__edge.selected .react-flow__edge-path.script-canvas-edge,
+.script-canvas-flow .react-flow__edge:hover .react-flow__edge-path.script-canvas-edge {
+  stroke: #0f6fdf;
+  stroke-width: 2.5;
+}
+
+@keyframes script-canvas-edge-flow {
+  to {
+    stroke-dashoffset: -13;
+  }
+}
+
+.script-canvas-flow .react-flow__handle.script-canvas-handle {
+  width: var(--canvas-handle-size) !important;
+  height: var(--canvas-handle-size) !important;
+  min-width: var(--canvas-handle-size) !important;
+  min-height: var(--canvas-handle-size) !important;
+  background: #fff !important;
+  border: 2px solid var(--canvas-brand) !important;
+  border-radius: 50% !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.14s ease, transform 0.2s ease !important;
+}
+
+.script-canvas-flow .react-flow__node:hover .react-flow__handle.script-canvas-handle,
+.script-canvas-flow .react-flow__node.selected .react-flow__handle.script-canvas-handle {
+  opacity: 1 !important;
+  pointer-events: all !important;
+}
+
+.script-canvas-flow .react-flow__handle.script-canvas-handle::after {
+  content: "+";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--canvas-brand);
+  pointer-events: none;
+}
+
+.script-canvas-flow .react-flow__controls {
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
+  border: 1px solid #e6e8ec;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.script-canvas-flow .react-flow__minimap {
+  border: 1px solid #e6e8ec;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}

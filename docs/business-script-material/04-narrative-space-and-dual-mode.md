@@ -6,7 +6,7 @@
 
 本文固定两件事：
 
-1. **内容维度**收敛为「剧本 → 集 → 叙事空间 → 分镜」四级；叙事空间同时是画布单位与生视频单位；
+1. **内容维度**收敛为「剧本 → 集 → 叙事空间 → 视频片段」，分镜挂在叙事空间上；叙事空间是编辑 / 画布 / 知识库单位，视频片段是生视频单位；
 2. **交互形态**提供画布模式与 Agent 对话模式两个入口，二者共用同一套工具与领域模型。
 
 本期只做解说漫叙事链路；**不做带货（commerce）**，不保留 `content_type` 分派机制。
@@ -22,16 +22,17 @@
 | 视频挂在分镜上 | 用户拿到几秒碎片，仍需自行拼接 |
 | 画布无边界 | 数百个分镜落在单画布上无法导航 |
 
-结论：需要一个既是编辑单位、又是成片单位、又是画布单位的中间层——**叙事空间**。
+结论：需要一个既是编辑单位、又是画布单位、又是检索单位的中间层——**叙事空间**。
 
-## 2. 内容维度：四级模型
+## 2. 内容维度：五级模型
 
 ```mermaid
 flowchart LR
   Script[剧本 ScriptProject] --> Ep[集 Episode]
   Ep --> NS[叙事空间 NarrativeSpace]
   NS --> Shot[分镜 ShotPlan]
-  NS --> Video[成片视频 VideoJob]
+  NS --> Seg[视频片段 VideoSegment]
+  Seg --> Video[成片视频 VideoJob]
   Script --> Style[风格圣经 StyleBible]
   Script --> Char[人物资产 CharacterAsset]
   Script --> Prop[归属道具 PropAsset]
@@ -43,10 +44,13 @@ flowchart LR
 |------|------|----------|------|
 | 剧本 | `script_project` | 1 | 全剧唯一的风格圣经与人物 / 道具锚点归属层 |
 | 集 | `episode` | 每剧 N 集 | 交付批次、排期与验收单位 |
-| **叙事空间** | `narrative_space` | 每集 N 个 | 可独立成片的连续画面单元；**画布单位 = 成片单位**；切分规则见 2.1 |
+| **叙事空间** | `narrative_space` | 每集 N 个 | 语义完整的一场戏；**画布单位 = 编辑单位 = 知识库单位**；长度不设限；切分规则见 2.1 |
 | 分镜 | `shot_plan` | 每叙事空间 N 个 | 镜头级描述：景别、动作、镜头语言，是视频提示词的输入素材 |
+| **视频片段** | `video_segment` | 每叙事空间 N 个 | 连续若干分镜的分组；**成片单位**，单段不超过模型上限；见 D1 |
 
-### 2.1 叙事空间怎么切（硬规则）
+### 2.1 叙事空间怎么切
+
+叙事空间是**语义单元**，回答的是「这是不是同一场戏」，不回答「能不能一次生成出来」。后者是视频片段的职责。
 
 叙事空间**不是**剧本里的节奏标签。下列标签只表示一集内的叙事起承转合，**禁止**当作叙事空间边界：
 
@@ -54,23 +58,39 @@ flowchart LR
 - `[中间Escalation]`
 - `[结尾Cliffhanger]`
 
-切分只看下面三条，满足任一条就断开为新的叙事空间：
+切分分两步。第一步规则粗切，只看字面信号：
 
 | 条件 | 含义 |
 |------|------|
 | **场景变化** | 地点 / 时空发生切换（如公寓 → 酒店套房、办公室 → 后巷） |
-| **画面变化（转场）** | 需要明确转场、切镜换场的视觉断裂，不能在同一成片里无缝接上 |
-| **视频时长上限** | 当前视频模型单次生成上限 **15 秒**；一个叙事空间聚合后的成片时长不得超过 15 秒，超出则在合适切点再拆 |
+| **画面变化（转场）** | 出现明确的转场、切镜换场词 |
 
-因此：一集通常有多个叙事空间；同一节奏段（如整个 Escalation）也可能因换场或超 15 秒被拆成多个空间。成片粒度仍是叙事空间（D1），不是分镜，也不是「开头/中间/结尾」整段。
+第二步由 `narrative-segmenter` Agent 逐集判定语义边界（见 D6）。粗切只认字面信号，常把一场戏切开、或把两场戏粘在一起，需要主观判断补上：
+
+| 构成边界 | 不构成边界 |
+|----------|------------|
+| 地点 / 时空切换 | 说话的人换了 |
+| 画面无法无缝接续 | 同场戏内的停顿、留白、内心独白 |
+| 戏的目的变了：对峙结束、揭露完成、关系不可逆转折 | 节奏标签 |
+| 情绪基调实质变化 | 段落变长 |
+
+**时长不参与叙事空间切分。** 一段戏演满一分钟仍是一个叙事空间，成片由视频片段层再分段。
 
 ### 2.2 叙事空间的三重身份
 
 | 身份 | 含义 |
 |------|------|
 | **编辑单位** | 一个叙事空间对应一个画布，组织分镜与物料 |
-| **生成单位** | 聚合产出**一段成片视频**（见 D1） |
+| **检索单位** | 知识库按叙事空间入库，一条带集号 / 空间号 / 地点 / 节拍，命中可定位到具体场次 |
 | **导航单位** | 剧本 / 集 / 叙事空间三级目录树的叶子 |
+
+成片不在这一层：一个叙事空间聚合产出**一到多段**成片视频，逐段挂在视频片段上（见 D1）。
+
+### 2.2.1 视频片段怎么切
+
+纯机械分组，不进 LLM：按分镜顺序累加 `duration_sec`，累计将超过模型单次生成上限（当前 **15 秒**）就断开为下一片段。单个分镜本身超上限时独立成段，由下游按上限截断。
+
+分组只在分镜规划完成后进行；重新划分片段会清掉该空间下未确认的成片提示词，因为镜头组变了旧提示词就对不上。
 
 ### 2.3 一致性锚点的归属层级
 
@@ -130,10 +150,13 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 
 ## 4. 关键决策
 
-### D1 视频生成粒度是叙事空间，不是分镜
+### D1 视频生成粒度是视频片段，不是分镜，也不是叙事空间
 
-分镜是镜头级**描述**单位，不是**交付**单位。一个叙事空间下的全部分镜 + 物料图 + 人物 / 道具锚点聚合为**一段**视频提示词，调用一次生视频。`video_prompt` 挂 `narrative_space_id`。  
-该段成片时长受模型上限约束（当前 **≤ 15 秒**），因此切叙事空间时必须同时考虑时长（见 2.1）。
+分镜是镜头级**描述**单位，不是**交付**单位；叙事空间是语义单位，长度不受模型约束。二者中间需要一个承接模型物理上限的层：**视频片段**。
+
+一个视频片段下的连续分镜 + 物料图 + 人物 / 道具锚点聚合为**一段**视频提示词，调用一次生视频。`video_prompt` 挂 `video_segment_id`（冗余保留 `narrative_space_id` 便于按空间聚合），`video_job` 挂 `video_prompt_id`。
+
+早期版本让叙事空间直接承担成片单位，导致 15 秒上限倒灌进语义切分，一集被切成十几个碎片。现在时长约束只作用在视频片段层。
 
 ### D2 叙事空间是画布的唯一承载单位
 
@@ -158,11 +181,22 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 不设审批流（无提交 / 审核 / 退回），状态只有 `ai` / `confirmed`。
 机制详见 [06-material-library-adoption.md 第 5 节](./06-material-library-adoption.md#5-新锁定决策定版--废稿历史--反悔)。
 
-### D6 结构解析不使用 LLM
+### D6 集边界用规则，叙事空间边界用 LLM
 
-集与叙事空间的边界识别、行类型分类由正则与规则完成。LLM 只负责语义抽取（人物、道具、造型、标签、分镜、双语）与提示词生成。  
-支持输入：`txt` / `md` / `docx` / `fdx`。  
-集边界可从稿面标记识别（如 `剧集 [N]`）；叙事空间边界按 2.1（场景 / 转场 / 15 秒），**不得**用 Hook / Escalation / Cliffhanger 切空间。
+集边界、行类型分类、元数据提取由正则与规则完成，稳定且零成本。支持输入：`txt` / `md` / `docx` / `fdx`。集边界从稿面标记识别（如 `剧集 [N]`）。
+
+叙事空间边界是主观判断：「这两段是不是同一场戏」没有可靠的字面信号，规则粗切只能当基线。由 `narrative-segmenter` Agent 逐集判定，**不得**用 Hook / Escalation / Cliffhanger 切空间。
+
+为防止模型改写原文，交互协议约定：
+
+| 方向 | 内容 |
+|------|------|
+| 送入 | 集元数据 + 规则粗切基线 + **编号后的正文段落** |
+| 返回 | 每个空间的**起止段号** + 标题 / 地点 / 时空 / 梗概 / 节拍 / 氛围 / 断开理由 |
+
+正文由服务端按段号重组，模型不接触正文写入路径。段号必须连续覆盖全集，出现重叠、跳段或遗漏直接判失败，不做兜底切分。
+
+视频片段的分组是机械约束，仍然不进 LLM（见 2.2.1）。
 
 ## 5. 七类结构化数据的落位
 
@@ -188,21 +222,29 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 | `script_document` | id, project_id, raw_text, version, parse_status, source_* | 已落地 |
 | `character_asset` / `prop_asset` / `material_prompt` | 含 `record_status` | 已落地 |
 | `episode` | id, project_id, ordinal, title, status, record_status | 已落地 |
-| `narrative_space` | id, episode_id, ordinal, title, summary, time_place, status, record_status | 已落地 |
-| `shot_plan` | id, narrative_space_id, ordinal, beat, camera, … | 表已建，服务未落地 |
-| `canvas_snapshot` | id, narrative_space_id, nodes, edges, viewport, version | 表已建，API / UI 未落地 |
-| `costume_change` / `bilingual_line` / `content_tag` | 见上节 | 未建 |
-| `material_image` | prompt_id, oss_uri, provider, seed, status | 未建 |
-| `video_prompt` | narrative_space_id, prompt_text, ref_image_ids, duration_sec, status | 未建 |
-| `video_job` | video_prompt_id, provider_job_id, oss_uri, status | 未建 |
+| `narrative_space` | id, episode_id, ordinal, title, summary, time_place, source_text, beat_type, mood, boundary_reason, segment_source, status, record_status | 已落地 |
+| `video_segment` | id, narrative_space_id, ordinal, title, shot_ids, source_text, duration_sec, status, record_status | 已落地 |
+| `shot_plan` | id, narrative_space_id, ordinal, beat, camera, … | 已落地 |
+| `canvas_snapshot` | id, narrative_space_id, nodes, edges, viewport, version | 已落地：API + 管理端画布 |
+| `costume_change` / `bilingual_line` / `content_tag` | 见上节 | `costume_change` 表已建，抽取未做 |
+| `material_image` | prompt_id, oss_uri, provider, seed, status | 已落地 |
+| `video_prompt` | video_segment_id, narrative_space_id, prompt_text, ref_image_ids, duration_sec, status | 已落地 |
+| `video_job` | video_prompt_id, video_segment_id, provider_job_id, oss_uri, status | 已落地 |
 
 ### 6.2 挂载关系（相对旧扁平模型）
 
 | 实体 | 挂载 |
 |------|------|
 | `shot_plan` | `narrative_space_id`（不是直挂 project） |
-| `video_prompt` | `narrative_space_id`（不是 `shot_id`） |
-| `video_job` | 仍挂 `video_prompt_id`；一空间一任务 |
+| `video_segment` | `narrative_space_id`；`shot_ids` 记录聚合了哪些分镜 |
+| `video_prompt` | `video_segment_id`（不是 `shot_id`，也不再是 `narrative_space_id`） |
+| `video_job` | 仍挂 `video_prompt_id`；一片段一任务 |
+
+### 6.3 知识库索引粒度
+
+项目命名空间 `script/project/{project_id}` 按**叙事空间**覆盖写入，一个空间一条，payload 带 `episode_ordinal` / `narrative_space_id` / `title` / `time_place` / `beat_type` / `mood`，可按集过滤，命中后能回溯到具体场次。
+
+上传时不再按长度盲切入库：盲切会把一场戏拆散，检索回来的片段没有场次归属。索引在结构切分完成后单独触发。
 
 ## 7. 落地顺序
 
@@ -235,4 +277,5 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 - 不为画布单独实现一套编排（D3）
 - 不做画布内时间轴剪辑
 - 不做两种模式之间的迁移向导
-- 不为结构解析引入 LLM（D6）
+- 不用 LLM 切集边界，也不用 LLM 分视频片段（D6）
+- 不做视频片段之间的自动拼接与转场渲染

@@ -1,0 +1,11 @@
+name: 叙事切分 Agent
+role: specialist
+description: 判定集内叙事空间的语义边界，按段落编号给出起止与节拍标注。
+system_prompt: prompts/system.md
+max_steps: 6
+tools:
+  - segment-narrative
+  - retrieve
+namespaces:
+  - script/craft/prompting
+  - script/craft/cinematography

@@ -7,6 +7,7 @@ import {
   type AgentStep,
   type ChatCitation,
 } from "../api/chat";
+import { CANVAS_STEP_CHANNEL } from "./script-canvas/sync/applyAgentStep";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -89,7 +90,24 @@ export function PlaygroundPage() {
             });
           },
           onCitation: (c) => setCitations((prev) => [...prev, c]),
-          onStep: (step) => setSteps((prev) => [...prev, step]),
+          onStep: (step) => {
+            setSteps((prev) => [...prev, step]);
+            // 剧本工坊：把 step 广播给已打开的叙事空间画布
+            if (slug === "script-workshop" && step.type === "tool") {
+              const args = (step.args || {}) as Record<string, unknown>;
+              const bc = new BroadcastChannel(CANVAS_STEP_CHANNEL);
+              bc.postMessage({
+                spaceId:
+                  typeof args.narrative_space_id === "string"
+                    ? args.narrative_space_id
+                    : null,
+                projectId:
+                  typeof args.project_id === "string" ? args.project_id : null,
+                step,
+              });
+              bc.close();
+            }
+          },
           onDone: (payload) => {
             setSessionId(payload.session_id);
             setRequestId(payload.request_id);

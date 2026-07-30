@@ -1,26 +1,23 @@
-"""阿里云 OSS（S3 兼容）。文档路径：tenant_id/kb_id/doc_id/..."""
+"""阿里云 OSS：官方 SDK（oss2）上传与访问。"""
 
 from __future__ import annotations
 
-import boto3
-from botocore.client import Config
+import oss2
 
 from packages.infra.config import get_settings
 
 
-def get_s3_client():
+def get_oss_bucket() -> oss2.Bucket:
+    """按当前配置构造 Bucket（官方 Auth + Endpoint）。"""
     settings = get_settings()
-    return boto3.client(
-        "s3",
-        endpoint_url=settings.oss_endpoint_url,
-        aws_access_key_id=settings.oss_access_key_id,
-        aws_secret_access_key=settings.oss_access_key_secret,
-        region_name=settings.oss_region_name,
-        # 阿里云 OSS 要求 virtual hosted style
-        config=Config(
-            signature_version="s3v4",
-            s3={"addressing_style": "virtual"},
-        ),
+    auth = oss2.Auth(settings.oss_access_key_id, settings.oss_access_key_secret)
+    return oss2.Bucket(
+        auth,
+        settings.oss_endpoint_url,
+        settings.oss_bucket,
+        # 与控制台默认一致：https + 虚拟主机风格
+        is_cname=False,
+        connect_timeout=30,
     )
 
 
@@ -35,10 +32,26 @@ def public_url(object_key: str) -> str:
     return f"{settings.oss_public_base}/{object_key.lstrip('/')}"
 
 
+def put_bytes(
+    object_key: str,
+    data: bytes,
+    *,
+    content_type: str | None = None,
+) -> str:
+    """官方 put_object 上传字节，返回公开 URL。"""
+    headers = {}
+    if content_type:
+        headers["Content-Type"] = content_type
+    bucket = get_oss_bucket()
+    bucket.put_object(object_key, data, headers=headers or None)
+    return public_url(object_key)
+
+
 def ping_oss() -> bool:
     settings = get_settings()
     if not settings.oss_enabled:
         raise RuntimeError("OSS_ENABLED=false")
-    client = get_s3_client()
-    client.head_bucket(Bucket=settings.oss_bucket)
+    bucket = get_oss_bucket()
+    # 官方探活：读桶元信息
+    bucket.get_bucket_info()
     return True

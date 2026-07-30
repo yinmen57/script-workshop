@@ -1,0 +1,13 @@
+id: segment-narrative
+name: 语义切分叙事空间
+description: 逐集判定叙事空间的语义边界并落库。规则粗切只看地点与转场字面信号，本工具按一场戏的完整性重新判定。缺省 script_text 时取项目最新剧本。
+risk_level: low
+entrypoint: src/tools.py:segment_narrative
+parameters:
+  type: object
+  properties:
+    project_id:
+      type: string
+    script_text:
+      type: string
+  required: [project_id]

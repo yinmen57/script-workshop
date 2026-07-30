@@ -1,0 +1,11 @@
+id: index-narrative-knowledge
+name: 索引叙事空间
+description: 把项目的叙事空间按场次写入知识库，每条带集号、空间号、地点与节拍，检索命中后可定位到具体场次。需先完成结构切分。
+risk_level: low
+entrypoint: src/tools.py:index_narrative_knowledge
+parameters:
+  type: object
+  properties:
+    project_id:
+      type: string
+  required: [project_id]

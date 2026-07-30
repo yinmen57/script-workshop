@@ -1,6 +1,7 @@
 import {
   Button,
   Card,
+  Collapse,
   Form,
   Input,
   Modal,
@@ -13,32 +14,50 @@ import {
 } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   confirmMaterialPrompt,
   confirmNarrativeSpace,
   confirmScriptAsset,
   confirmShot,
+  confirmVideoPrompt,
   createScriptProject,
+  deleteNarrativeSpace,
   generateMaterialPrompts,
+  generateProjectVideoPrompts,
+  generateSpaceVideoPrompt,
   getScriptAssets,
   getScriptStructure,
+  indexProjectKnowledge,
   listMaterialPrompts,
+  listRevisions,
+  listSceneSpaces,
   listScriptDocuments,
   listScriptProjects,
   listShots,
+  listVideoJobs,
+  listVideoPrompts,
   parseScriptProject,
   parseScriptStructure,
   planProjectShots,
   planSpaceShots,
+  registerMaterialImage,
+  renderMaterialImage,
+  renderVideoPrompt,
+  revertRevision,
+  segmentScriptStructure,
+  updateNarrativeSpace,
   uploadScriptFile,
   type CharacterAsset,
+  type Episode,
   type MaterialPrompt,
   type NarrativeSpace,
   type PropAsset,
+  type RecordRevision,
   type ScriptProject,
   type ShotPlan,
+  type VideoPrompt,
 } from "../api/scriptBiz";
 import axios from "axios";
 
@@ -61,9 +80,18 @@ export function ScriptBizPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [parseOpen, setParseOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [editNs, setEditNs] = useState<NarrativeSpace | null>(null);
+  const [revisionTarget, setRevisionTarget] = useState<{
+    type: string;
+    id: string;
+    label: string;
+  } | null>(null);
+  const [imageOpen, setImageOpen] = useState(false);
   const [active, setActive] = useState<ScriptProject | null>(null);
   const [form] = Form.useForm();
   const [parseForm] = Form.useForm();
+  const [editNsForm] = Form.useForm();
+  const [imageForm] = Form.useForm();
 
   const projects = useQuery({
     queryKey: ["script-biz-projects"],
@@ -100,6 +128,34 @@ export function ScriptBizPage() {
     enabled: Boolean(active?.id),
   });
 
+  const videoPrompts = useQuery({
+    queryKey: ["script-biz-video-prompts", active?.id],
+    queryFn: () => listVideoPrompts(active!.id),
+    enabled: Boolean(active?.id),
+  });
+
+  const videoJobs = useQuery({
+    queryKey: ["script-biz-video-jobs", active?.id],
+    queryFn: () => listVideoJobs(active!.id),
+    enabled: Boolean(active?.id),
+  });
+
+  const sceneSpaces = useQuery({
+    queryKey: ["script-biz-scene-spaces", active?.id],
+    queryFn: () => listSceneSpaces(active!.id),
+    enabled: Boolean(active?.id),
+  });
+
+  const revisions = useQuery({
+    queryKey: [
+      "script-biz-revisions",
+      revisionTarget?.type,
+      revisionTarget?.id,
+    ],
+    queryFn: () => listRevisions(revisionTarget!.type, revisionTarget!.id),
+    enabled: Boolean(revisionTarget?.type && revisionTarget?.id),
+  });
+
   const createMut = useMutation({
     mutationFn: createScriptProject,
     onSuccess: () => {
@@ -132,12 +188,16 @@ export function ScriptBizPage() {
 
   const materialMut = useMutation({
     mutationFn: () => generateMaterialPrompts(active!.id),
-    onSuccess: (data) => {
-      const skipped = data.skipped_confirmed ?? 0;
+    onSuccess: (job) => {
+      const result = (job.result || {}) as {
+        total?: number;
+        skipped_confirmed?: number;
+      };
+      const skipped = result.skipped_confirmed ?? 0;
       message.success(
         skipped
-          ? `已生成 ${data.total} 条，跳过 ${skipped} 条已确认`
-          : `已生成 ${data.total} 条物料提示词`,
+          ? `已生成 ${result.total ?? 0} 条，跳过 ${skipped} 条已确认`
+          : `已生成 ${result.total ?? 0} 条物料提示词`,
       );
       queryClient.invalidateQueries({ queryKey: ["script-biz-prompts", active?.id] });
     },
@@ -183,11 +243,44 @@ export function ScriptBizPage() {
     onError: (e: unknown) => message.error(errMsg(e)),
   });
 
+  const structureSegmentMut = useMutation({
+    mutationFn: () => segmentScriptStructure(active!.id),
+    onSuccess: (job) => {
+      const parsed = (job.result || {}) as {
+        episode_count?: number;
+        narrative_space_count?: number;
+      };
+      message.success(
+        `语义切分完成：${parsed.episode_count ?? 0} 集 / ${parsed.narrative_space_count ?? 0} 个叙事空间`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["script-biz-structure", active?.id] });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const indexKnowledgeMut = useMutation({
+    mutationFn: () => indexProjectKnowledge(active!.id),
+    onSuccess: (job) => {
+      const result = (job.result || {}) as {
+        narrative_space_count?: number;
+        indexed?: number;
+      };
+      message.success(
+        `已按叙事空间入库：${result.narrative_space_count ?? 0} 个空间 / ${result.indexed ?? 0} 块`,
+      );
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
   const planShotsMut = useMutation({
     mutationFn: () => planProjectShots(active!.id),
-    onSuccess: (data) => {
+    onSuccess: (job) => {
+      const result = (job.result || {}) as {
+        space_count?: number;
+        total?: number;
+      };
       message.success(
-        `已规划 ${data.space_count} 个叙事空间，共 ${data.total} 个分镜`,
+        `已规划 ${result.space_count ?? 0} 个叙事空间，共 ${result.total ?? 0} 个分镜`,
       );
       queryClient.invalidateQueries({ queryKey: ["script-biz-shots", active?.id] });
     },
@@ -196,8 +289,9 @@ export function ScriptBizPage() {
 
   const planSpaceShotsMut = useMutation({
     mutationFn: (spaceId: string) => planSpaceShots(spaceId),
-    onSuccess: (data) => {
-      message.success(`该空间已规划 ${data.total} 个分镜`);
+    onSuccess: (job) => {
+      const result = (job.result || {}) as { total?: number };
+      message.success(`该空间已规划 ${result.total ?? 0} 个分镜`);
       queryClient.invalidateQueries({ queryKey: ["script-biz-shots", active?.id] });
     },
     onError: (e: unknown) => message.error(errMsg(e)),
@@ -212,13 +306,145 @@ export function ScriptBizPage() {
     onError: (e: unknown) => message.error(errMsg(e)),
   });
 
+  const genVideoMut = useMutation({
+    mutationFn: () => generateProjectVideoPrompts(active!.id),
+    onSuccess: (job) => {
+      const result = (job.result || {}) as { space_count?: number };
+      message.success(
+        `已生成 ${result.space_count ?? 0} 个叙事空间的成片提示词`,
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-video-prompts", active?.id],
+      });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const genSpaceVideoMut = useMutation({
+    mutationFn: (spaceId: string) => generateSpaceVideoPrompt(spaceId),
+    onSuccess: () => {
+      message.success("该空间成片提示词已生成");
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-video-prompts", active?.id],
+      });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const confirmVideoMut = useMutation({
+    mutationFn: (promptId: string) => confirmVideoPrompt(promptId),
+    onSuccess: () => {
+      message.success("成片提示词已定版");
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-video-prompts", active?.id],
+      });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const updateNsMut = useMutation({
+    mutationFn: (values: {
+      title?: string;
+      summary?: string;
+      time_place?: string;
+      ordinal?: number | string;
+    }) =>
+      updateNarrativeSpace(editNs!.id, {
+        ...values,
+        ordinal:
+          values.ordinal === undefined || values.ordinal === ""
+            ? undefined
+            : Number(values.ordinal),
+      }),
+    onSuccess: () => {
+      message.success("叙事空间已更新");
+      setEditNs(null);
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-structure", active?.id],
+      });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const deleteNsMut = useMutation({
+    mutationFn: (spaceId: string) => deleteNarrativeSpace(spaceId),
+    onSuccess: () => {
+      message.success("已删除");
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-structure", active?.id],
+      });
+      queryClient.invalidateQueries({ queryKey: ["script-biz-shots", active?.id] });
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-video-prompts", active?.id],
+      });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const revertMut = useMutation({
+    mutationFn: (revisionId: string) => revertRevision(revisionId),
+    onSuccess: (data) => {
+      message.success("已反悔写回");
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-revisions", data.target_type, data.target_id],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-structure", active?.id],
+      });
+      queryClient.invalidateQueries({ queryKey: ["script-biz-shots", active?.id] });
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-video-prompts", active?.id],
+      });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const registerImageMut = useMutation({
+    mutationFn: (values: {
+      url: string;
+      label?: string;
+      source_kind?: string;
+      source_id?: string;
+    }) =>
+      registerMaterialImage(active!.id, {
+        url: values.url,
+        label: values.label,
+        origin: "uploaded",
+        source_kind: values.source_kind,
+        source_id: values.source_id,
+      }),
+    onSuccess: () => {
+      message.success("图片已登记到目录");
+      setImageOpen(false);
+      imageForm.resetFields();
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const renderImageMut = useMutation({
+    mutationFn: (promptId: string) => renderMaterialImage(promptId),
+    onSuccess: (job) => {
+      const result = (job.result || {}) as { url?: string };
+      message.success(result.url ? `物料图已生成` : "生图作业完成");
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
+  const renderVideoMut = useMutation({
+    mutationFn: (promptId: string) => renderVideoPrompt(promptId),
+    onSuccess: () => {
+      message.success("成片视频已生成");
+      queryClient.invalidateQueries({
+        queryKey: ["script-biz-video-jobs", active?.id],
+      });
+    },
+    onError: (e: unknown) => message.error(errMsg(e)),
+  });
+
   const uploadMut = useMutation({
     mutationFn: (file: File) => uploadScriptFile(active!.id, file),
     onSuccess: (data) => {
-      const indexed = data.knowledge?.indexed ?? 0;
-      message.success(
-        `已转 Markdown 并入库（${data.markdown_chars} 字），知识库写入 ${indexed} 片`,
-      );
+      message.success(`已转 Markdown 并入库（${data.markdown_chars} 字）`);
       setUploadOpen(false);
       queryClient.invalidateQueries({ queryKey: ["script-biz-docs", active?.id] });
       queryClient.invalidateQueries({ queryKey: ["script-biz-projects"] });
@@ -226,8 +452,20 @@ export function ScriptBizPage() {
     onError: (e: unknown) => message.error(errMsg(e)),
   });
 
+  // 集按 ordinal 升序；集内叙事空间也按 ordinal 升序（手风琴维度）
+  const episodesSorted: Episode[] = useMemo(() => {
+    const items = [...(structure.data?.items || [])];
+    items.sort((a, b) => a.ordinal - b.ordinal);
+    return items.map((ep) => ({
+      ...ep,
+      narrative_spaces: [...(ep.narrative_spaces || [])].sort(
+        (a, b) => a.ordinal - b.ordinal,
+      ),
+    }));
+  }, [structure.data?.items]);
+
   const structureRows =
-    structure.data?.items.flatMap((ep) =>
+    episodesSorted.flatMap((ep) =>
       ep.narrative_spaces.map((ns) => ({
         ...ns,
         episode_title: ep.title,
@@ -236,8 +474,104 @@ export function ScriptBizPage() {
     ) || [];
 
   const nsTitleById = new Map(
-    structureRows.map((ns) => [ns.id, `${ns.episode_title || `第 ${ns.episode_ordinal} 集`} · ${ns.title}`]),
+    structureRows.map((ns) => [
+      ns.id,
+      `${ns.episode_title || `第 ${ns.episode_ordinal} 集`} · ${ns.title}`,
+    ]),
   );
+
+  const nsActionColumns = [
+    { title: "序号", dataIndex: "ordinal", width: 64 },
+    { title: "叙事空间", dataIndex: "title", width: 160 },
+    { title: "时空", dataIndex: "time_place", ellipsis: true },
+    {
+      title: "估时",
+      dataIndex: "estimated_duration_sec",
+      width: 72,
+      render: (v: number | null | undefined) => (v == null ? "-" : `${v}s`),
+    },
+    { title: "摘要", dataIndex: "summary", ellipsis: true },
+    {
+      title: "记录态",
+      dataIndex: "record_status",
+      width: 96,
+      render: recordTag,
+    },
+    {
+      title: "操作",
+      width: 320,
+      render: (_: unknown, row: NarrativeSpace) => (
+        <Space size={4} wrap>
+          <Button
+            size="small"
+            type="primary"
+            onClick={() => navigate(`/script-biz/canvas/${row.id}`)}
+          >
+            画布
+          </Button>
+          <Button
+            size="small"
+            loading={planSpaceShotsMut.isPending}
+            onClick={() => planSpaceShotsMut.mutate(row.id)}
+          >
+            规划分镜
+          </Button>
+          <Button
+            size="small"
+            loading={genSpaceVideoMut.isPending}
+            onClick={() => genSpaceVideoMut.mutate(row.id)}
+          >
+            成片提示词
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              setEditNs(row);
+              editNsForm.setFieldsValue({
+                title: row.title,
+                summary: row.summary,
+                time_place: row.time_place,
+                ordinal: row.ordinal,
+              });
+            }}
+          >
+            编辑
+          </Button>
+          <Button
+            size="small"
+            onClick={() =>
+              setRevisionTarget({
+                type: "narrative_space",
+                id: row.id,
+                label: row.title,
+              })
+            }
+          >
+            历史
+          </Button>
+          {row.record_status === "confirmed" ? null : (
+            <>
+              <Button
+                size="small"
+                loading={confirmNsMut.isPending}
+                onClick={() => confirmNsMut.mutate(row.id)}
+              >
+                确认
+              </Button>
+              <Button
+                size="small"
+                danger
+                loading={deleteNsMut.isPending}
+                onClick={() => deleteNsMut.mutate(row.id)}
+              >
+                删除
+              </Button>
+            </>
+          )}
+        </Space>
+      ),
+    },
+  ];
 
   return (
     <div>
@@ -361,75 +695,104 @@ export function ScriptBizPage() {
           <Card
             title="目录结构 · 集 / 叙事空间"
             extra={
-              <Button
-                size="small"
-                loading={structureParseMut.isPending}
-                onClick={() => structureParseMut.mutate()}
-                disabled={!documents.data?.items?.length}
-              >
-                仅解析结构
-              </Button>
+              <Space>
+                <Button
+                  size="small"
+                  loading={structureParseMut.isPending}
+                  onClick={() => structureParseMut.mutate()}
+                  disabled={!documents.data?.items?.length}
+                >
+                  规则粗切
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={structureSegmentMut.isPending}
+                  onClick={() => structureSegmentMut.mutate()}
+                  disabled={!documents.data?.items?.length}
+                >
+                  语义切分
+                </Button>
+                <Button
+                  size="small"
+                  loading={indexKnowledgeMut.isPending}
+                  onClick={() => indexKnowledgeMut.mutate()}
+                  disabled={!episodesSorted.length}
+                >
+                  入知识库
+                </Button>
+              </Space>
             }
             style={{ marginBottom: 16 }}
           >
             <Typography.Paragraph type="secondary">
-              规则切分：集标记 + 场景变化 / 转场 / 单空间约 ≤15s；不用 Hook/Escalation/Cliffhanger
+              手风琴按「集」展开；集与叙事空间均按序号升序。规则粗切只看集标记与地点 /
+              转场；语义切分再交 LLM 判定一场戏的边界，长度不设限，成片按视频片段分段。
+            </Typography.Paragraph>
+            {structure.isLoading ? (
+              <Typography.Text type="secondary">加载目录…</Typography.Text>
+            ) : !episodesSorted.length ? (
+              <Typography.Text type="secondary">
+                上传剧本后点「仅解析结构」或完整「解析」
+              </Typography.Text>
+            ) : (
+              <Collapse
+                accordion
+                defaultActiveKey={episodesSorted[0]?.id}
+                items={episodesSorted.map((ep) => ({
+                  key: ep.id,
+                  label: (
+                    <Space>
+                      <Typography.Text strong>
+                        {ep.title || `第 ${ep.ordinal} 集`}
+                      </Typography.Text>
+                      <Tag>{ep.narrative_spaces.length} 个叙事空间</Tag>
+                      {recordTag(ep.record_status)}
+                    </Space>
+                  ),
+                  children: (
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                      dataSource={ep.narrative_spaces}
+                      columns={nsActionColumns}
+                    />
+                  ),
+                }))}
+              />
+            )}
+          </Card>
+
+          <Card
+            title="地点身份 · scene_space"
+            style={{ marginBottom: 16 }}
+          >
+            <Typography.Paragraph type="secondary">
+              跨集视觉一致性锚点；结构解析时按地点名自动回填并挂到叙事空间。
             </Typography.Paragraph>
             <Table
               rowKey="id"
               size="small"
-              loading={structure.isLoading}
+              loading={sceneSpaces.isLoading}
               pagination={false}
-              dataSource={structureRows}
-              locale={{ emptyText: "上传剧本后点「仅解析结构」或完整「解析」" }}
+              dataSource={sceneSpaces.data?.items || []}
+              locale={{ emptyText: "解析结构后自动生成" }}
               columns={[
+                { title: "名称", dataIndex: "name", width: 140 },
+                { title: "key", dataIndex: "canonical_key", ellipsis: true },
+                { title: "锚点", dataIndex: "anchor", ellipsis: true },
                 {
-                  title: "集",
-                  dataIndex: "episode_title",
-                  width: 100,
-                  render: (v: string, row: NarrativeSpace & { episode_ordinal: number }) =>
-                    v || `第 ${row.episode_ordinal} 集`,
+                  title: "参考图",
+                  dataIndex: "reference_image_url",
+                  ellipsis: true,
+                  render: (v: string | null | undefined) => v || "-",
                 },
-                { title: "序号", dataIndex: "ordinal", width: 64 },
-                { title: "叙事空间", dataIndex: "title", width: 160 },
-                { title: "时空", dataIndex: "time_place", ellipsis: true },
-                {
-                  title: "估时",
-                  dataIndex: "estimated_duration_sec",
-                  width: 72,
-                  render: (v: number | null | undefined) =>
-                    v == null ? "-" : `${v}s`,
-                },
-                { title: "摘要", dataIndex: "summary", ellipsis: true },
                 {
                   title: "记录态",
                   dataIndex: "record_status",
                   width: 96,
                   render: recordTag,
-                },
-                {
-                  title: "操作",
-                  width: 200,
-                  render: (_: unknown, row: NarrativeSpace) => (
-                    <Space size={4}>
-                      <Button
-                        size="small"
-                        loading={planSpaceShotsMut.isPending}
-                        onClick={() => planSpaceShotsMut.mutate(row.id)}
-                      >
-                        规划分镜
-                      </Button>
-                      {row.record_status === "confirmed" ? null : (
-                        <Button
-                          size="small"
-                          loading={confirmNsMut.isPending}
-                          onClick={() => confirmNsMut.mutate(row.id)}
-                        >
-                          确认
-                        </Button>
-                      )}
-                    </Space>
-                  ),
                 },
               ]}
             />
@@ -497,18 +860,167 @@ export function ScriptBizPage() {
                 },
                 {
                   title: "操作",
-                  width: 100,
-                  render: (_: unknown, row: ShotPlan) =>
-                    row.record_status === "confirmed" ? null : (
+                  width: 160,
+                  render: (_: unknown, row: ShotPlan) => (
+                    <Space size={4}>
                       <Button
                         size="small"
-                        loading={confirmShotMut.isPending}
-                        onClick={() => confirmShotMut.mutate(row.id)}
+                        onClick={() =>
+                          setRevisionTarget({
+                            type: "shot_plan",
+                            id: row.id,
+                            label: `镜 ${row.ordinal}`,
+                          })
+                        }
                       >
-                        确认
+                        历史
                       </Button>
+                      {row.record_status === "confirmed" ? null : (
+                        <Button
+                          size="small"
+                          loading={confirmShotMut.isPending}
+                          onClick={() => confirmShotMut.mutate(row.id)}
+                        >
+                          确认
+                        </Button>
+                      )}
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          </Card>
+
+          <Card
+            title="成片视频提示词 · 挂叙事空间"
+            extra={
+              <Space>
+                <Button size="small" onClick={() => setImageOpen(true)}>
+                  登记图片
+                </Button>
+                <Button
+                  size="small"
+                  loading={genVideoMut.isPending}
+                  onClick={() => genVideoMut.mutate()}
+                  disabled={!shots.data?.items?.length}
+                >
+                  批量生成
+                </Button>
+              </Space>
+            }
+            style={{ marginBottom: 16 }}
+          >
+            <Typography.Paragraph type="secondary">
+              D1：一空间一段成片提示词，聚合该空间全部分镜；时长 ≤15s。
+            </Typography.Paragraph>
+            <Table
+              rowKey="id"
+              size="small"
+              loading={videoPrompts.isLoading}
+              pagination={false}
+              dataSource={videoPrompts.data?.items || []}
+              locale={{ emptyText: "先规划分镜，再生成成片提示词" }}
+              columns={[
+                {
+                  title: "叙事空间",
+                  dataIndex: "narrative_space_id",
+                  width: 180,
+                  ellipsis: true,
+                  render: (id: string) => nsTitleById.get(id) || id,
+                },
+                { title: "版本", dataIndex: "version", width: 64 },
+                { title: "提示词", dataIndex: "prompt_text", ellipsis: true },
+                {
+                  title: "时长",
+                  dataIndex: "duration_sec",
+                  width: 72,
+                  render: (v: number | null | undefined) =>
+                    v == null ? "-" : `${v}s`,
+                },
+                {
+                  title: "记录态",
+                  dataIndex: "record_status",
+                  width: 96,
+                  render: recordTag,
+                },
+                {
+                  title: "操作",
+                  width: 220,
+                  render: (_: unknown, row: VideoPrompt) => (
+                    <Space size={4}>
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          setRevisionTarget({
+                            type: "video_prompt",
+                            id: row.id,
+                            label: `v${row.version}`,
+                          })
+                        }
+                      >
+                        历史
+                      </Button>
+                      {row.record_status === "confirmed" ? (
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={renderVideoMut.isPending}
+                          onClick={() => renderVideoMut.mutate(row.id)}
+                        >
+                          生视频
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          loading={confirmVideoMut.isPending}
+                          onClick={() => confirmVideoMut.mutate(row.id)}
+                        >
+                          确认
+                        </Button>
+                      )}
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          </Card>
+
+          <Card title="成片视频任务" style={{ marginBottom: 16 }}>
+            <Table
+              rowKey="id"
+              size="small"
+              loading={videoJobs.isLoading}
+              pagination={false}
+              dataSource={videoJobs.data?.items || []}
+              locale={{ emptyText: "确认成片提示词后点「生视频」" }}
+              columns={[
+                {
+                  title: "叙事空间",
+                  dataIndex: "narrative_space_id",
+                  width: 180,
+                  ellipsis: true,
+                  render: (id: string) => nsTitleById.get(id) || id,
+                },
+                {
+                  title: "状态",
+                  dataIndex: "status",
+                  width: 100,
+                  render: (v: string) => <Tag>{v}</Tag>,
+                },
+                {
+                  title: "成片",
+                  dataIndex: "oss_uri",
+                  ellipsis: true,
+                  render: (v: string | null | undefined) =>
+                    v ? (
+                      <a href={v} target="_blank" rel="noreferrer">
+                        打开
+                      </a>
+                    ) : (
+                      "-"
                     ),
                 },
+                { title: "错误", dataIndex: "error", ellipsis: true },
               ]}
             />
           </Card>
@@ -633,17 +1145,29 @@ export function ScriptBizPage() {
                 },
                 {
                   title: "操作",
-                  width: 100,
-                  render: (_: unknown, row: MaterialPrompt) =>
-                    row.record_status === "confirmed" ? null : (
-                      <Button
-                        size="small"
-                        loading={confirmPromptMut.isPending}
-                        onClick={() => confirmPromptMut.mutate(row.id)}
-                      >
-                        确认
-                      </Button>
-                    ),
+                  width: 180,
+                  render: (_: unknown, row: MaterialPrompt) => (
+                    <Space size={4}>
+                      {row.record_status === "confirmed" ? (
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={renderImageMut.isPending}
+                          onClick={() => renderImageMut.mutate(row.id)}
+                        >
+                          生图
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          loading={confirmPromptMut.isPending}
+                          onClick={() => confirmPromptMut.mutate(row.id)}
+                        >
+                          确认
+                        </Button>
+                      )}
+                    </Space>
+                  ),
                 },
               ]}
             />
@@ -721,6 +1245,108 @@ export function ScriptBizPage() {
           </Form.Item>
           <Form.Item name="script_text" label="剧本文本（可选）">
             <Input.TextArea rows={12} placeholder="留空则使用已上传的最新剧本" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`编辑叙事空间 · ${editNs?.title || ""}`}
+        open={Boolean(editNs)}
+        onCancel={() => setEditNs(null)}
+        onOk={() => editNsForm.submit()}
+        confirmLoading={updateNsMut.isPending}
+        destroyOnHidden
+      >
+        <Form
+          form={editNsForm}
+          layout="vertical"
+          onFinish={(values) => updateNsMut.mutate(values)}
+        >
+          <Form.Item name="title" label="标题" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="ordinal" label="序号">
+            <Input type="number" />
+          </Form.Item>
+          <Form.Item name="time_place" label="时空">
+            <Input />
+          </Form.Item>
+          <Form.Item name="summary" label="摘要">
+            <Input.TextArea rows={4} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`废稿历史 · ${revisionTarget?.label || ""}`}
+        open={Boolean(revisionTarget)}
+        onCancel={() => setRevisionTarget(null)}
+        footer={null}
+        width={720}
+        destroyOnHidden
+      >
+        <Table
+          rowKey="id"
+          size="small"
+          loading={revisions.isLoading}
+          pagination={false}
+          dataSource={revisions.data?.items || []}
+          locale={{ emptyText: "尚无历史快照（确认或编辑后产生）" }}
+          columns={[
+            { title: "版本", dataIndex: "revision_no", width: 72 },
+            { title: "原因", dataIndex: "change_reason", width: 100 },
+            { title: "时间", dataIndex: "created_at", width: 180 },
+            {
+              title: "快照摘要",
+              dataIndex: "snapshot",
+              ellipsis: true,
+              render: (snap: RecordRevision["snapshot"]) =>
+                JSON.stringify(snap).slice(0, 120),
+            },
+            {
+              title: "操作",
+              width: 100,
+              render: (_: unknown, row: RecordRevision) => (
+                <Button
+                  size="small"
+                  loading={revertMut.isPending}
+                  onClick={() => revertMut.mutate(row.id)}
+                >
+                  反悔写回
+                </Button>
+              ),
+            },
+          ]}
+        />
+      </Modal>
+
+      <Modal
+        title="登记图片到目录"
+        open={imageOpen}
+        onCancel={() => setImageOpen(false)}
+        onOk={() => imageForm.submit()}
+        confirmLoading={registerImageMut.isPending}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          第四段生图前可先手工登记 URL；可挂到地点身份（source_kind=scene_space）。
+        </Typography.Paragraph>
+        <Form
+          form={imageForm}
+          layout="vertical"
+          onFinish={(values) => registerImageMut.mutate(values)}
+        >
+          <Form.Item name="url" label="图片 URL" rules={[{ required: true }]}>
+            <Input placeholder="https://..." />
+          </Form.Item>
+          <Form.Item name="label" label="标签">
+            <Input />
+          </Form.Item>
+          <Form.Item name="source_kind" label="来源类型">
+            <Input placeholder="scene_space / costume_change（可选）" />
+          </Form.Item>
+          <Form.Item name="source_id" label="来源 ID">
+            <Input placeholder="对应主记录 id（可选）" />
           </Form.Item>
         </Form>
       </Modal>

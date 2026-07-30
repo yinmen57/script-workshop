@@ -13,7 +13,13 @@ def get_redis() -> Redis:
     global _redis
     if _redis is None:
         settings = get_settings()
-        _redis = Redis.from_url(settings.redis_url, decode_responses=True)
+        # socket_timeout=None：允许 XREADGROUP 等阻塞命令超过默认读超时
+        _redis = Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=None,
+        )
     return _redis
 
 

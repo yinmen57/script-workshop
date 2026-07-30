@@ -111,6 +111,18 @@ async def _get_or_create_ns(
     }
 
 
+_RESERVED_PAYLOAD_KEYS = {"tenant_id", "namespace", "content", "ordinal"}
+
+
+def _safe_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    """metadata 扁平写入 payload 以便按字段过滤，保留键不允许被覆盖。"""
+    return {
+        k: v
+        for k, v in meta.items()
+        if isinstance(k, str) and k not in _RESERVED_PAYLOAD_KEYS
+    }
+
+
 def _chunk_text(text_value: str, chunk_size: int, overlap: int) -> list[str]:
     text_value = text_value.strip()
     if not text_value:
@@ -203,33 +215,47 @@ async def index_texts(
     if not texts:
         raise ValidationAppError("texts required")
 
-    plain: list[str] = []
+    blocks: list[tuple[str, dict[str, Any]]] = []
     for item in texts:
-        if isinstance(item, str):
-            plain.append(item)
-        elif isinstance(item, dict):
-            plain.append(str(item.get("text") or item.get("content") or ""))
+        if isinstance(item, dict):
+            content = str(item.get("text") or item.get("content") or "")
+            meta = item.get("metadata")
+            blocks.append((content, meta if isinstance(meta, dict) else {}))
+        elif isinstance(item, str):
+            blocks.append((item, {}))
         else:
-            plain.append(str(item))
-    plain = [p for p in plain if p.strip()]
-    if not plain:
+            blocks.append((str(item), {}))
+    blocks = [(t, m) for t, m in blocks if t.strip()]
+    if not blocks:
         raise ValidationAppError("texts empty after normalize")
 
-    chunks: list[str] = []
-    for block in plain:
-        chunks.extend(_chunk_text(block, chunk_size, chunk_overlap))
+    # 同一来源被切成多块时共享 metadata，检索命中后可回溯到原始记录
+    chunks: list[tuple[str, dict[str, Any]]] = []
+    for block, meta in blocks:
+        parts = _chunk_text(block, chunk_size, chunk_overlap)
+        for part_index, part in enumerate(parts):
+            chunks.append(
+                (
+                    part,
+                    {
+                        **_safe_metadata(meta),
+                        "chunk_index": part_index,
+                        "chunk_total": len(parts),
+                    },
+                )
+            )
     if not chunks:
         raise ValidationAppError("no chunks produced")
 
     embedder = _embedding_adapter()
-    vectors = await embedder.embed(chunks)
+    vectors = await embedder.embed([c for c, _ in chunks])
     dimension = len(vectors[0])
     ns = await _get_or_create_ns(session, tenant_id, namespace, dimension)
 
     client = get_qdrant()
     # qdrant point id 用稳定整数哈希
     points = []
-    for i, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
+    for i, ((chunk, meta), vector) in enumerate(zip(chunks, vectors, strict=True)):
         pid = int(
             hashlib.sha1(
                 f"{tenant_id}:{namespace}:{i}:{chunk[:64]}".encode()
@@ -245,6 +271,7 @@ async def index_texts(
                     "namespace": namespace,
                     "content": chunk,
                     "ordinal": i,
+                    **meta,
                 },
             )
         )
@@ -352,6 +379,11 @@ async def search(
                     "chunk_id": str(hit.id),
                     "score": float(hit.score or 0),
                     "content": payload.get("content") or "",
+                    "metadata": {
+                        k: v
+                        for k, v in payload.items()
+                        if k not in _RESERVED_PAYLOAD_KEYS
+                    },
                     "recall_score": float(hit.score or 0),
                 }
             )

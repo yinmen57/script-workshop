@@ -11,7 +11,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.business_script import project_service, structure_parser
+from packages.business_script import keys, project_service, structure_parser
+from packages.domain.errors import NotFoundError, ValidationAppError
 from packages.domain.ids import new_id
 
 
@@ -29,6 +30,10 @@ def _ns_public(row: dict[str, Any]) -> dict[str, Any]:
         "estimated_duration_sec": float(row["estimated_duration_sec"])
         if row.get("estimated_duration_sec") is not None
         else None,
+        "beat_type": row.get("beat_type") or "",
+        "mood": row.get("mood") or "",
+        "boundary_reason": row.get("boundary_reason") or "",
+        "segment_source": row.get("segment_source") or "rule",
         "status": row["status"],
         "record_status": row.get("record_status") or "ai",
     }
@@ -251,6 +256,40 @@ async def _clear_ai_structure(
     await session.execute(
         text(
             """
+            DELETE FROM video_prompt
+            WHERE tenant_id = :tenant_id AND project_id = :project_id
+              AND record_status = 'ai'
+              AND narrative_space_id IN (
+                SELECT id FROM (
+                  SELECT id FROM narrative_space
+                  WHERE project_id = :project_id AND tenant_id = :tenant_id
+                    AND record_status = 'ai'
+                ) AS ai_ns
+              )
+            """
+        ),
+        {"project_id": project_id, "tenant_id": tenant_id},
+    )
+    await session.execute(
+        text(
+            """
+            DELETE FROM video_segment
+            WHERE tenant_id = :tenant_id AND project_id = :project_id
+              AND record_status = 'ai'
+              AND narrative_space_id IN (
+                SELECT id FROM (
+                  SELECT id FROM narrative_space
+                  WHERE project_id = :project_id AND tenant_id = :tenant_id
+                    AND record_status = 'ai'
+                ) AS ai_ns
+              )
+            """
+        ),
+        {"project_id": project_id, "tenant_id": tenant_id},
+    )
+    await session.execute(
+        text(
+            """
             DELETE FROM narrative_space
             WHERE project_id = :project_id AND tenant_id = :tenant_id
               AND record_status = 'ai'
@@ -300,6 +339,95 @@ async def _get_episode_by_ordinal(
     return dict(row) if row else None
 
 
+async def ensure_scene_space(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    project_id: str,
+    location: str,
+) -> str | None:
+    """按地点名 get-or-create scene_space，返回 id。空地点返回 None。"""
+    name = (location or "").strip()
+    if not name:
+        return None
+    try:
+        canonical = keys.scene_key(name)
+    except ValueError:
+        return None
+    existing = (
+        await session.execute(
+            text(
+                """
+                SELECT id FROM scene_space
+                WHERE project_id = :project_id AND tenant_id = :tenant_id
+                  AND canonical_key = :canonical_key
+                LIMIT 1
+                """
+            ),
+            {
+                "project_id": project_id,
+                "tenant_id": tenant_id,
+                "canonical_key": canonical,
+            },
+        )
+    ).mappings().first()
+    if existing:
+        return existing["id"]
+    space_id = new_id("ssc")
+    await session.execute(
+        text(
+            """
+            INSERT INTO scene_space
+              (id, tenant_id, project_id, canonical_key, name, anchor,
+               record_status)
+            VALUES
+              (:id, :tenant_id, :project_id, :canonical_key, :name, :anchor,
+               'ai')
+            """
+        ),
+        {
+            "id": space_id,
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "canonical_key": canonical,
+            "name": name[:128],
+            "anchor": name,
+        },
+    )
+    return space_id
+
+
+async def list_scene_spaces(
+    session: AsyncSession, tenant_id: str, project_id: str
+) -> dict:
+    await project_service.require_project(session, tenant_id, project_id)
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT * FROM scene_space
+                WHERE project_id = :project_id AND tenant_id = :tenant_id
+                ORDER BY name ASC
+                """
+            ),
+            {"project_id": project_id, "tenant_id": tenant_id},
+        )
+    ).mappings().all()
+    items = [
+        {
+            "id": r["id"],
+            "project_id": r["project_id"],
+            "canonical_key": r["canonical_key"],
+            "name": r["name"],
+            "anchor": r.get("anchor") or "",
+            "reference_image_url": r.get("reference_image_url"),
+            "record_status": r.get("record_status") or "ai",
+        }
+        for r in rows
+    ]
+    return {"items": items, "total": len(items)}
+
+
 async def _insert_spaces(
     session: AsyncSession,
     *,
@@ -316,16 +444,27 @@ async def _insert_spaces(
         ordinal = start_ordinal + i
         ns_id = new_id("sns")
         title = (space.get("title") or f"叙事空间 {ordinal}").strip()
+        location = (space.get("location") or "").strip()
+        scene_space_id = space.get("scene_space_id")
+        if not scene_space_id:
+            scene_space_id = await ensure_scene_space(
+                session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                location=location or title,
+            )
         await session.execute(
             text(
                 """
                 INSERT INTO narrative_space
                   (id, tenant_id, project_id, episode_id, scene_space_id, ordinal, title,
                    summary, time_place, source_text, estimated_duration_sec,
+                   beat_type, mood, boundary_reason, segment_source,
                    status, record_status)
                 VALUES
                   (:id, :tenant_id, :project_id, :episode_id, :scene_space_id, :ordinal, :title,
                    :summary, :time_place, :source_text, :estimated_duration_sec,
+                   :beat_type, :mood, :boundary_reason, :segment_source,
                    'draft', 'ai')
                 """
             ),
@@ -334,29 +473,26 @@ async def _insert_spaces(
                 "tenant_id": tenant_id,
                 "project_id": project_id,
                 "episode_id": episode_id,
-                "scene_space_id": space.get("scene_space_id"),
+                "scene_space_id": scene_space_id,
                 "ordinal": ordinal,
                 "title": title,
                 "summary": space.get("summary") or "",
                 "time_place": space.get("time_place") or "",
                 "source_text": space.get("source_text") or "",
                 "estimated_duration_sec": space.get("estimated_duration_sec"),
+                "beat_type": space.get("beat_type"),
+                "mood": space.get("mood"),
+                "boundary_reason": space.get("boundary_reason"),
+                "segment_source": space.get("segment_source") or "rule",
             },
         )
         count += 1
     return count
 
 
-async def confirm_narrative_space(
-    session: AsyncSession,
-    tenant_id: str,
-    space_id: str,
-    *,
-    created_by: str | None = None,
-) -> dict:
-    from packages.business_script import revision_service
-    from packages.domain.errors import NotFoundError
-
+async def _require_space(
+    session: AsyncSession, tenant_id: str, space_id: str
+) -> dict[str, Any]:
     row = (
         await session.execute(
             text(
@@ -370,7 +506,20 @@ async def confirm_narrative_space(
     ).mappings().first()
     if row is None:
         raise NotFoundError("narrative space not found")
-    public = _ns_public(dict(row))
+    return dict(row)
+
+
+async def confirm_narrative_space(
+    session: AsyncSession,
+    tenant_id: str,
+    space_id: str,
+    *,
+    created_by: str | None = None,
+) -> dict:
+    from packages.business_script import revision_service
+
+    row = await _require_space(session, tenant_id, space_id)
+    public = _ns_public(row)
     if (row.get("record_status") or "ai") != "confirmed":
         await revision_service.save_revision(
             session,
@@ -393,15 +542,119 @@ async def confirm_narrative_space(
         {"id": space_id, "tenant_id": tenant_id},
     )
     await session.commit()
-    refreshed = (
-        await session.execute(
-            text(
-                """
-                SELECT * FROM narrative_space
-                WHERE id = :id AND tenant_id = :tenant_id
-                """
-            ),
-            {"id": space_id, "tenant_id": tenant_id},
+    refreshed = await _require_space(session, tenant_id, space_id)
+    return _ns_public(refreshed)
+
+
+async def update_narrative_space(
+    session: AsyncSession,
+    tenant_id: str,
+    space_id: str,
+    payload: dict[str, Any],
+    *,
+    created_by: str | None = None,
+) -> dict:
+    """手工编辑叙事空间；已确认记录改前先快照。"""
+    from packages.business_script import revision_service
+
+    row = await _require_space(session, tenant_id, space_id)
+    public = _ns_public(row)
+    allowed = (
+        "title",
+        "summary",
+        "time_place",
+        "source_text",
+        "estimated_duration_sec",
+        "beat_type",
+        "mood",
+        "boundary_reason",
+    )
+    updates: dict[str, Any] = {}
+    for key in allowed:
+        if key in payload:
+            updates[key] = payload[key]
+    if "ordinal" in payload:
+        try:
+            updates["ordinal"] = int(payload["ordinal"])
+        except (TypeError, ValueError) as exc:
+            raise ValidationAppError("ordinal 必须是整数") from exc
+    if not updates:
+        raise ValidationAppError("没有可更新字段")
+
+    if (row.get("record_status") or "ai") == "confirmed":
+        await revision_service.save_revision(
+            session,
+            tenant_id=tenant_id,
+            project_id=row["project_id"],
+            target_type="narrative_space",
+            target_id=space_id,
+            snapshot=public,
+            change_reason="manual_edit",
+            created_by=created_by,
         )
-    ).mappings().first()
-    return _ns_public(dict(refreshed))
+
+    sets = ", ".join(f"{k} = :{k}" for k in updates)
+    params = {"id": space_id, "tenant_id": tenant_id, **updates}
+    await session.execute(
+        text(
+            f"""
+            UPDATE narrative_space
+            SET {sets}
+            WHERE id = :id AND tenant_id = :tenant_id
+            """
+        ),
+        params,
+    )
+    await session.commit()
+    refreshed = await _require_space(session, tenant_id, space_id)
+    return _ns_public(refreshed)
+
+
+async def delete_narrative_space(
+    session: AsyncSession, tenant_id: str, space_id: str
+) -> dict:
+    """仅删除 ai 态叙事空间及其 ai 分镜 / ai 视频提示词。"""
+    row = await _require_space(session, tenant_id, space_id)
+    if (row.get("record_status") or "ai") == "confirmed":
+        raise ValidationAppError("已确认叙事空间不可删除，请先反悔")
+    await session.execute(
+        text(
+            """
+            DELETE FROM shot_plan
+            WHERE narrative_space_id = :ns_id AND tenant_id = :tenant_id
+              AND record_status = 'ai'
+            """
+        ),
+        {"ns_id": space_id, "tenant_id": tenant_id},
+    )
+    await session.execute(
+        text(
+            """
+            DELETE FROM video_prompt
+            WHERE narrative_space_id = :ns_id AND tenant_id = :tenant_id
+              AND record_status = 'ai'
+            """
+        ),
+        {"ns_id": space_id, "tenant_id": tenant_id},
+    )
+    await session.execute(
+        text(
+            """
+            DELETE FROM video_segment
+            WHERE narrative_space_id = :ns_id AND tenant_id = :tenant_id
+              AND record_status = 'ai'
+            """
+        ),
+        {"ns_id": space_id, "tenant_id": tenant_id},
+    )
+    await session.execute(
+        text(
+            """
+            DELETE FROM narrative_space
+            WHERE id = :id AND tenant_id = :tenant_id AND record_status = 'ai'
+            """
+        ),
+        {"id": space_id, "tenant_id": tenant_id},
+    )
+    await session.commit()
+    return {"deleted": True, "id": space_id}

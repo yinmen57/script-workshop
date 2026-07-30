@@ -1,10 +1,12 @@
-"""剧本结构规则解析（D6）：集 + 叙事空间，不调用 LLM。
+"""剧本结构规则解析：集 + 叙事空间粗切，不调用 LLM。
 
 集边界：稿面标记如「剧集 [N]」「第 N 集」。
-叙事空间边界（04 §2.1）：
+叙事空间粗切边界（04 §2.1）：
 - 场景变化（地点切换）
 - 画面转场信号
-- 累计成片时长将超过 15 秒
+
+时长不再参与切分：叙事空间是语义单元，成片切分下沉到 video_segment。
+语义边界的细判由 narrative_segment_service 交 LLM 完成，本模块只给粗切基线。
 
 禁止用 Hook / Escalation / Cliffhanger 作为叙事空间边界（仅跳过标签行）。
 """
@@ -13,9 +15,6 @@ from __future__ import annotations
 
 import re
 from typing import Any
-
-# 视频模型单次生成上限（秒）
-MAX_NS_DURATION_SEC = 15.0
 
 _EPISODE_RE = re.compile(
     r"^(?:剧集\s*\[(\d+)\]|第\s*(\d+)\s*集)\s*$"
@@ -29,6 +28,35 @@ _PACE_LABEL_RE = re.compile(
     r"Hook\s*First|Escalation|Cliffhanger)\]\s*$",
     re.IGNORECASE,
 )
+# markitdown：集标题「**剧集 [1]**」；元数据「* **现身角色**: …」
+_MD_LIST_PREFIX_RE = re.compile(r"^(?:[\-\u2022>•]\s+|\*\s+)")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
+
+
+def _normalize_structure_line(line: str) -> str:
+    """去掉列表符与成对加粗，便于匹配集边界 / 元数据。
+
+    注意：不能把 ``**现身角色**`` 的开头 ``**`` 当装饰剥掉，
+    否则会变成 ``现身角色**:`` 导致元数据匹配失败。
+    """
+    s = (line or "").strip()
+    if not s:
+        return ""
+    # 只剥一层 markdown 列表前缀（"* " / "-"），不动加粗标记
+    s = _MD_LIST_PREFIX_RE.sub("", s).strip()
+    # 成对去掉 **bold** / *italic*
+    prev = None
+    while prev != s:
+        prev = s
+        s = _MD_BOLD_RE.sub(r"\1", s)
+        s = _MD_ITALIC_RE.sub(r"\1", s)
+    s = s.strip().strip("*_").strip()
+    # [***开头Hook First***] → [开头Hook First]
+    if s.startswith("[") and s.endswith("]"):
+        inner = s[1:-1].strip().strip("*_").strip()
+        s = f"[{inner}]"
+    return s
 _TRANSITION_RE = re.compile(
     r"(?i)\b(?:cut to|smash cut|fade (?:in|out|to)|dissolve to|"
     r"meanwhile|later that|the next (?:morning|day|night)|"
@@ -53,15 +81,18 @@ def estimate_duration_sec(text: str) -> float:
 
 def parse_script_structure(script_text: str) -> dict[str, Any]:
     """把剧本文本解析为集 / 叙事空间树（纯规则）。"""
-    lines = [ln.strip() for ln in (script_text or "").splitlines()]
-    lines = [ln for ln in lines if ln]
+    raw_lines = [ln.strip() for ln in (script_text or "").splitlines()]
+    raw_lines = [ln for ln in raw_lines if ln]
 
     preamble: list[str] = []
     episodes_raw: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
 
-    for line in lines:
-        ep_m = _EPISODE_RE.match(line)
+    for line in raw_lines:
+        norm = _normalize_structure_line(line)
+        if not norm:
+            continue
+        ep_m = _EPISODE_RE.match(norm)
         if ep_m:
             if current is not None:
                 episodes_raw.append(current)
@@ -76,9 +107,9 @@ def parse_script_structure(script_text: str) -> dict[str, Any]:
         if current is None:
             preamble.append(line)
             continue
-        if _PACE_LABEL_RE.match(line):
+        if _PACE_LABEL_RE.match(norm):
             continue
-        meta_m = _META_RE.match(line)
+        meta_m = _META_RE.match(norm)
         if meta_m and not current["body_lines"]:
             current["meta"][meta_m.group(1)] = meta_m.group(2).strip()
             continue
@@ -95,7 +126,7 @@ def parse_script_structure(script_text: str) -> dict[str, Any]:
                 "ordinal": 1,
                 "title": "第 1 集",
                 "meta": {},
-                "body_lines": lines,
+                "body_lines": raw_lines,
             }
         ]
         preamble = []
@@ -112,6 +143,8 @@ def parse_script_structure(script_text: str) -> dict[str, Any]:
                 "time": ep["meta"].get("时间") or "",
                 "location": ep["meta"].get("位置") or "",
                 "mood": ep["meta"].get("氛围") or "",
+                # 供语义切分 Agent 按段落编号引用原文，避免 LLM 重写正文
+                "body_paragraphs": list(ep["body_lines"]),
                 "narrative_spaces": spaces,
             }
         )
@@ -191,44 +224,46 @@ def _split_narrative_spaces(episode: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_text": "",
                 "estimated_duration_sec": 0.0,
                 "location": loc,
+                "paragraph_range": [0, 0],
             }
         ]
 
-    # 先按场景 / 转场切成粗段，再按 15 秒硬拆
-    rough_segments: list[dict[str, Any]] = []
+    # 只按场景 / 转场切；时长不再参与，长段留给 video_segment 分段
+    spaces: list[dict[str, Any]] = []
     buf: list[str] = []
+    buf_start = 0
     loc_idx = 0
 
-    def flush() -> None:
-        nonlocal buf
+    def flush(end_index: int) -> None:
+        nonlocal buf, buf_start
         if not buf:
             return
-        text = "\n".join(buf).strip()
+        body = "\n".join(buf).strip()
         loc = locations[loc_idx] if locations else (loc_field or "主场景")
-        rough_segments.append({"location": loc, "text": text})
+        spaces.append(
+            {
+                "location": loc,
+                "title": loc,
+                "summary": summary if not spaces else "",
+                "time_place": _join_time_place(time_s, loc),
+                "source_text": body,
+                "estimated_duration_sec": round(estimate_duration_sec(body), 2),
+                "paragraph_range": [buf_start + 1, end_index],
+            }
+        )
         buf = []
+        buf_start = end_index
 
-    for line in body_lines:
+    for index, line in enumerate(body_lines):
         next_loc = _detect_location_index(line, locations, loc_idx)
         transition = _has_transition_cue(line)
         if buf and (next_loc != loc_idx or transition):
-            flush()
+            flush(index)
             loc_idx = next_loc
         elif next_loc != loc_idx:
             loc_idx = next_loc
         buf.append(line)
-    flush()
-
-    spaces: list[dict[str, Any]] = []
-    for seg in rough_segments:
-        spaces.extend(
-            _split_by_duration(
-                text=seg["text"],
-                location=seg["location"],
-                time_s=time_s,
-                episode_summary=summary if not spaces else "",
-            )
-        )
+    flush(len(body_lines))
 
     # 编号与标题去重后缀
     for i, ns in enumerate(spaces, start=1):
@@ -240,54 +275,6 @@ def _split_narrative_spaces(episode: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             ns["title"] = ns["location"] or f"叙事空间 {i}"
     return spaces
-
-
-def _split_by_duration(
-    *,
-    text: str,
-    location: str,
-    time_s: str,
-    episode_summary: str,
-) -> list[dict[str, Any]]:
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    if not paragraphs:
-        return []
-
-    chunks: list[list[str]] = []
-    current: list[str] = []
-    current_sec = 0.0
-
-    for para in paragraphs:
-        para_sec = estimate_duration_sec(para)
-        # 单段已超上限：独立成块（不再继续粘）
-        if para_sec >= MAX_NS_DURATION_SEC and not current:
-            chunks.append([para])
-            continue
-        if current and current_sec + para_sec > MAX_NS_DURATION_SEC:
-            chunks.append(current)
-            current = [para]
-            current_sec = para_sec
-        else:
-            current.append(para)
-            current_sec += para_sec
-    if current:
-        chunks.append(current)
-
-    out: list[dict[str, Any]] = []
-    for i, paras in enumerate(chunks):
-        body = "\n".join(paras).strip()
-        dur = estimate_duration_sec(body)
-        out.append(
-            {
-                "location": location,
-                "title": location,
-                "summary": episode_summary if i == 0 else "",
-                "time_place": _join_time_place(time_s, location),
-                "source_text": body,
-                "estimated_duration_sec": round(dur, 2),
-            }
-        )
-    return out
 
 
 def _join_time_place(time_s: str, location: str) -> str:

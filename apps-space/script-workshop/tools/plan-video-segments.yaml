@@ -1,0 +1,13 @@
+id: plan-video-segments
+name: 划分视频片段
+description: 把叙事空间的分镜按视频模型单次生成上限分成若干视频片段，一片段一次生成。可指定 narrative_space_id；缺省则处理项目下已有分镜的全部空间。
+risk_level: low
+entrypoint: src/tools.py:plan_video_segments
+parameters:
+  type: object
+  properties:
+    project_id:
+      type: string
+    narrative_space_id:
+      type: string
+  required: [project_id]

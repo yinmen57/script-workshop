@@ -78,6 +78,9 @@ services:
     volumes:
       # 本地开发时让管理端重新加载宿主机中的 Agent 应用空间
       - ./apps-space:/app/apps-space:ro
+      - ./packages:/app/packages:ro
+      - ./apps/worker:/app/apps/worker:ro
+      - ./alembic:/app/alembic:ro
     depends_on:
       mysql:
         condition: service_healthy
@@ -92,6 +95,43 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+
+  # 剧本业务作业 Worker（与 api 同镜像）
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ai-worker
+    restart: unless-stopped
+    command: ["python", "-m", "apps.worker"]
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      XINFERENCE_BASE_URL: ${XINFERENCE_BASE_URL_DOCKER:-http://host.docker.internal:9997}
+    volumes:
+      - ./apps-space:/app/apps-space:ro
+      - ./packages:/app/packages:ro
+      - ./apps/worker:/app/apps/worker:ro
+      - ./alembic:/app/alembic:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      disable: true
 
 volumes:
   mysql_data:
