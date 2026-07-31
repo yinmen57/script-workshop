@@ -12,9 +12,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.business_script import (
+    consistency_context,
     knowledge_context,
     llm,
-    parse_service,
     project_service,
     revision_service,
     shot_service,
@@ -186,7 +186,7 @@ async def generate_for_segment(
     narrative_space_id = segment["narrative_space_id"]
     space = await _require_space(session, tenant_id, narrative_space_id)
     project_id = segment["project_id"]
-    project = await project_service.require_project(session, tenant_id, project_id)
+    await project_service.require_project(session, tenant_id, project_id)
 
     confirmed = (
         await session.execute(
@@ -205,10 +205,6 @@ async def generate_for_segment(
             "该视频片段已有确认成片提示词，请先反悔后再重生成"
         )
 
-    style_bible = project.get("style_bible")
-    if not style_bible:
-        raise ValidationAppError("项目尚未解析，缺少 style_bible")
-
     shot_ids = segment.get("shot_ids")
     if isinstance(shot_ids, str):
         shot_ids = json.loads(shot_ids)
@@ -225,7 +221,20 @@ async def generate_for_segment(
     if not shots:
         raise ValidationAppError("该视频片段未关联分镜，请先重新划分片段")
 
-    assets = await parse_service.get_assets(session, tenant_id, project_id)
+    used_char_ids: list[str] = []
+    for s in shots:
+        for cid in s.get("character_ids") or []:
+            if cid and cid not in used_char_ids:
+                used_char_ids.append(cid)
+    pack = await consistency_context.assemble_pack(
+        session,
+        tenant_id,
+        project_id,
+        narrative_space_id=narrative_space_id,
+        character_ids=used_char_ids or None,
+        include_craft=False,
+    )
+    style_bible = pack["style_bible"]
 
     await session.execute(
         text(
@@ -246,7 +255,10 @@ async def generate_for_segment(
             + "\n\n以下是已检索到的工艺规范（硬性约束，冲突时以之为准）：\n"
             + craft
         )
-    system_prompt += "\n\n只输出 JSON，不要 markdown 说明。"
+    system_prompt = (
+        system_prompt + "\n\n" + pack["prompt_block"]
+        + "\n\n只输出 JSON，不要 markdown 说明。"
+    )
 
     template = llm.load_prompt("agents/shot-planner/prompts/video-prompt.md")
     user_prompt = llm.render_prompt(
@@ -259,6 +271,7 @@ async def generate_for_segment(
             "time_place": space.get("time_place") or "",
             "beat_type": space.get("beat_type") or "",
             "mood": space.get("mood") or "",
+            "scene_space": pack.get("scene_space"),
         },
         video_segment={
             "id": segment["id"],
@@ -269,8 +282,9 @@ async def generate_for_segment(
             "source_text": (segment.get("source_text") or "")[:4000],
         },
         shots=shots,
-        character_assets=assets["characters"],
-        prop_assets=assets["props"],
+        character_assets=pack["characters"],
+        prop_assets=pack["props"],
+        reference_images=pack.get("reference_images") or [],
     )
     parsed = await llm.chat_json(
         [

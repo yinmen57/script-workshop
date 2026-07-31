@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.business_script import (
+    consistency_context,
     knowledge_context,
     llm,
     parse_service,
@@ -175,12 +176,17 @@ async def plan_shots_for_space(
             "该叙事空间已有确认分镜，请先反悔或手工清理后再重规划"
         )
 
-    style_bible = project.get("style_bible")
-    if not style_bible:
-        raise ValidationAppError("项目尚未解析，缺少 style_bible")
-
-    assets = await parse_service.get_assets(session, tenant_id, project_id)
-    if not assets["characters"] and not assets["props"]:
+    pack = await consistency_context.assemble_pack(
+        session,
+        tenant_id,
+        project_id,
+        narrative_space_id=narrative_space_id,
+        include_craft=False,
+    )
+    style_bible = pack["style_bible"]
+    characters = pack["characters"]
+    props = pack["props"]
+    if not characters and not props:
         raise ValidationAppError("项目无人物或道具资产，无法规划分镜")
 
     # 只清本空间的 ai 分镜
@@ -203,7 +209,11 @@ async def plan_shots_for_space(
             + "\n\n以下是已检索到的工艺规范（硬性约束，冲突时以之为准）：\n"
             + craft
         )
-    system_prompt += "\n\n只输出 JSON，不要 markdown 说明。"
+    # 工作台事实优先于工艺规范
+    system_prompt = (
+        system_prompt + "\n\n" + pack["prompt_block"]
+        + "\n\n只输出 JSON，不要 markdown 说明。"
+    )
 
     template = llm.load_prompt("agents/shot-planner/prompts/plan-shots.md")
     scene_payload = {
@@ -213,13 +223,14 @@ async def plan_shots_for_space(
         "time_place": space.get("time_place") or "",
         "estimated_duration_sec": space.get("estimated_duration_sec"),
         "source_text": (space.get("source_text") or "")[:6000],
+        "scene_space": pack.get("scene_space"),
     }
     user_prompt = llm.render_prompt(
         template,
         style_bible=style_bible,
         scene=scene_payload,
-        character_assets=assets["characters"],
-        prop_assets=assets["props"],
+        character_assets=characters,
+        prop_assets=props,
     )
     parsed = await llm.chat_json(
         [
@@ -231,8 +242,8 @@ async def plan_shots_for_space(
     if not isinstance(shots, list) or not shots:
         raise ValidationAppError("分镜规划结果为空")
 
-    char_by_key = {c["character_key"]: c["id"] for c in assets["characters"]}
-    prop_by_key = {p["prop_key"]: p["id"] for p in assets["props"]}
+    char_by_key = {c["character_key"]: c["id"] for c in characters}
+    prop_by_key = {p["prop_key"]: p["id"] for p in props}
 
     created: list[dict[str, Any]] = []
     for i, item in enumerate(shots, start=1):

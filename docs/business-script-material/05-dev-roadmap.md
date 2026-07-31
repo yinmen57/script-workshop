@@ -15,8 +15,8 @@
 | 五级表：`episode` / `narrative_space` / `shot_plan` / `video_segment` / `canvas_snapshot` | `models.py` + Alembic |
 | 规则粗切多集与叙事空间（集标记 + 场景变化 / 转场），不调 LLM | `structure_parser` + `structure_service` |
 | 语义切分叙事空间：逐集 LLM 判边界，只收段号不收正文 | `narrative_segment_service` + `narrative-segmenter` Agent |
-| 视频片段划分（按分镜时长累加 ≤15s，纯规则） | `video_segment_service` + `plan-video-segments` |
-| 知识库按叙事空间入库，payload 带集号 / 空间号 / 节拍 | `script_index_service` + `index-narrative-knowledge` |
+| 视频片段编组：LLM 按分镜内容判边界，只收镜号，≤15s 作硬校验 | `video_segment_service` + `plan-video-segments` |
+| 项目知识库从工作台重建（叙事空间+人物+场景）；ConsistencyPack 接入生成 | `script_index_service` + `consistency_context` + 工作台「知识库」模式 |
 | 地点身份 `scene_space` 回填并挂叙事空间 | `structure_service.ensure_scene_space` |
 | 分镜规划 / 确认（挂 `narrative_space_id`） | `shot_service` + `plan_shots` 工具 |
 | 成片视频提示词（一片段一段，D1） | `video_prompt_service` + `generate-video-prompts` |
@@ -40,7 +40,8 @@
 | 内容类型 | **不做带货（commerce）**。拆除 `content_type` 字段、校验、知识库类型分派机制与前端选项；只做解说漫节奏与规则 |
 | 结构解析 | 按 04 的 **D6 / 2.1**：集边界用稿面标记（如 `剧集 [N]`），规则粗切按场景变化与转场，均不进 LLM；**叙事空间的语义边界交 LLM 判定**，只收段号不收正文，段号不连续即判失败 |
 | 成片粒度 | 按 04 的 **D1**：叙事空间是语义单元，长度不设限；15 秒模型上限下沉到 `video_segment`，一片段一次生成，`video_prompt` 改挂 `video_segment_id` |
-| 知识库粒度 | 项目命名空间按**叙事空间**入库，payload 带集号 / 空间号 / 地点 / 节拍；上传不再按长度盲切索引 |
+| 片段编组 | 按 04 的 **2.2.1**：由 LLM 按分镜内容判定哪几镜能一次连贯拍完，只收镜号不收正文；15 秒只作硬校验，多镜合计超限即判失败，不做机械累加兜底 |
+| 知识库粒度 | 项目命名空间为可重建副本（叙事空间+人物+场景）；工作台 DB 为唯一事实；上传不盲切；删除项目清向量 |
 | product 建模 | 不做产品替换；不建 `product_asset`；知识库中带货相关条目一并删除 |
 | 业务表迁移 | **Alembic**；补 `packages/business_script/models.py` 作 schema 唯一来源，服务层可继续裸 SQL |
 | 迁移接管范围 | 现状 stamp 为 baseline；**剧本业务表**交 Alembic；平台基础表仍留 `init.sql` |
@@ -148,14 +149,14 @@ docker exec -w /app ai-api alembic upgrade head
 |------|------|------|------|
 | 6.1 | 叙事空间去时长约束 | `structure_parser` 移除 15 秒硬拆，只按集标记与地点 / 转场粗切 | 已完成 |
 | 6.2 | `narrative-segmenter` Agent | 逐集判定语义边界；送编号段落，收段号 + 节拍 / 氛围 / 断开理由；段号不连续即失败，无兜底 | 已完成 |
-| 6.3 | `video_segment` 片段层 | 新表 + 按分镜时长累加 ≤15s 分组；`video_prompt` / `video_job` 改挂 `video_segment_id` | 已完成 |
-| 6.4 | 知识库按叙事空间入库 | `script_index_service`；向量索引支持自定义 payload；上传路径撤掉盲切索引 | 已完成 |
+| 6.3 | `video_segment` 片段层 | 新表 + LLM 按分镜内容编组（只收镜号，≤15s 硬校验）；`video_prompt` / `video_job` 改挂 `video_segment_id` | 已完成 |
+| 6.4 | 知识库按叙事空间入库 | `script_index_service`；向量索引支持自定义 payload；上传路径撤掉盲切索引 | 已完成（已扩展为空间+人物+场景 + ConsistencyPack） |
 | 6.5 | 管理端与画布适配片段层 | 目录树展示节拍 / 氛围；片段列表与逐片段生成入口 | 目录树按钮已接，片段列表待补 |
 
 **验收**
 
 - 第一集切出的叙事空间数量与实际场次相当（个位数），且每个空间能说清为什么在那里断开
-- 一个长叙事空间能划出多个视频片段，逐片段出提示词并各自生成一段视频
+- 一个长叙事空间能编出多个视频片段，每段说得清这几镜为什么编在一起，逐片段出提示词并各自生成一段视频
 - 知识库检索命中后可直接定位到「第几集第几个叙事空间」
 
 **迁移命令（容器内）**
@@ -171,7 +172,7 @@ docker exec -w /app ai-api alembic upgrade head
 - 带货 / commerce / product 替换 / `content_type` 分派机制
 - 分镜级成片视频；剧本级或分镜级单画布
 - 为画布单独写第二套编排
-- 用 LLM 切集边界或分视频片段（叙事空间语义边界除外，见第 2 节）
+- 用 LLM 切集边界（叙事空间与片段边界走 LLM，见第 2 节）
 - 视频片段之间的自动拼接与转场渲染
 - 九张无人读写平台死表清理（可另开专项）
 - Qdrant 异步客户端、core↔governance 循环依赖（可另开专项）

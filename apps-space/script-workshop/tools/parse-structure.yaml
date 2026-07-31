@@ -1,0 +1,23 @@
+id: parse-structure
+name: 规则粗切结构
+description: |
+  按稿面标记与地点/转场信号规则切出集与叙事空间粗切基线，不调用 LLM。
+  用途：刚上传剧本后需要目录骨架，或为语义切分准备粗切基线。
+  前置：项目已有剧本文档，或本次传入 script_text。
+  产出：episode / narrative_space 落库（重跑只清 ai）。
+  是否修改数据：是，会清理未确认的结构节点。
+  是否产生费用：否（纯规则）。
+  不适用：不要用它做语义边界精修；语义切分请用 segment-narrative。
+  容易混淆：parse-script 抽人物道具与风格圣经；parse-structure 只切结构；segment-narrative 用 LLM 判语义边界。
+risk_level: low
+entrypoint: src/tools.py:parse_structure
+parameters:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 剧本项目 id
+    script_text:
+      type: string
+      description: 可选；缺省时取项目最新剧本文档
+  required: [project_id]

@@ -223,7 +223,8 @@ class NarrativeSpace(Base):
 class VideoSegment(Base):
     """视频片段：叙事空间内的成片生成单元，单段不超过模型上限（15 秒）。
 
-    由该空间连续若干分镜聚合而成，是 video_prompt / video_job 的挂载层。
+    由该空间连续若干分镜聚合而成，边界由 LLM 按分镜内容判定（能否一次连贯拍完），
+    是 video_prompt / video_job 的挂载层。
     """
 
     __tablename__ = "video_segment"

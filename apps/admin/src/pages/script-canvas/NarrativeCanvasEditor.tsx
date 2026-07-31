@@ -48,9 +48,11 @@ const edgeTypes = { canvas: CanvasEdge };
 
 type Props = {
   spaceId: string;
+  /** 嵌入工作台时填满父容器，隐藏返回与侧挂对话 */
+  embedded?: boolean;
 };
 
-function EditorInner({ spaceId }: Props) {
+function EditorInner({ spaceId, embedded = false }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState<CanvasSnapshot | null>(null);
@@ -242,7 +244,14 @@ function EditorInner({ spaceId }: Props) {
   }, [spaceId, setNodes, setEdges, withActions]);
 
   return (
-    <div style={{ height: "100vh", width: "100vw", position: "relative", overflow: "hidden" }}>
+    <div
+      style={{
+        height: embedded ? "100%" : "100vh",
+        width: embedded ? "100%" : "100vw",
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
       <ReactFlow
         className="script-canvas-flow"
         nodes={nodes}
@@ -285,9 +294,11 @@ function EditorInner({ spaceId }: Props) {
               boxShadow: canvasTokens.panelShadow,
             }}
           >
-            <Button size="small" onClick={() => navigate("/script-biz")}>
-              返回工坊
-            </Button>
+            {embedded ? null : (
+              <Button size="small" onClick={() => navigate("/script-workspace")}>
+                返回工作台
+              </Button>
+            )}
             <Typography.Text>
               {meta?.space?.title || "叙事空间画布"}
             </Typography.Text>
@@ -303,13 +314,15 @@ function EditorInner({ spaceId }: Props) {
             </Button>
           </Space>
         </Panel>
-        <Panel position="top-right">
-          <CanvasChatPanel
-            spaceId={spaceId}
-            projectId={meta?.project_id}
-            onStep={applyStep}
-          />
-        </Panel>
+        {embedded ? null : (
+          <Panel position="top-right">
+            <CanvasChatPanel
+              spaceId={spaceId}
+              projectId={meta?.project_id}
+              onStep={applyStep}
+            />
+          </Panel>
+        )}
       </ReactFlow>
       {loading ? (
         <div

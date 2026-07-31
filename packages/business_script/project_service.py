@@ -112,6 +112,83 @@ async def require_project(session: AsyncSession, tenant_id: str, project_id: str
     return await get_project(session, tenant_id, project_id)
 
 
+async def delete_project(
+    session: AsyncSession, tenant_id: str, project_id: str
+) -> dict:
+    """删除项目及其全部下游数据，不可恢复。"""
+    project = await require_project(session, tenant_id, project_id)
+    params = {"project_id": project_id, "tenant_id": tenant_id}
+
+    # 画布挂在叙事空间上，先按空间清
+    await session.execute(
+        text(
+            """
+            DELETE FROM canvas_snapshot
+            WHERE tenant_id = :tenant_id
+              AND narrative_space_id IN (
+                SELECT id FROM narrative_space
+                WHERE project_id = :project_id AND tenant_id = :tenant_id
+              )
+            """
+        ),
+        params,
+    )
+
+    # 按依赖从下游到上游清理（这些表都有 project_id）
+    for table in (
+        "video_job",
+        "video_prompt",
+        "job_run",
+        "record_revision",
+        "material_image",
+        "material_prompt",
+        "costume_change",
+        "shot_plan",
+        "video_segment",
+        "narrative_space",
+        "episode",
+        "scene_space",
+        "prop_asset",
+        "character_asset",
+        "script_document",
+    ):
+        await session.execute(
+            text(
+                f"""
+                DELETE FROM {table}
+                WHERE project_id = :project_id AND tenant_id = :tenant_id
+                """
+            ),
+            params,
+        )
+
+    # 项目表主键是 id，不是 project_id
+    await session.execute(
+        text(
+            """
+            DELETE FROM script_project
+            WHERE id = :project_id AND tenant_id = :tenant_id
+            """
+        ),
+        params,
+    )
+
+    await session.commit()
+
+    # 工作台事实已删；同步清理可重建的项目向量副本
+    from packages.business_script import script_index_service
+
+    knowledge_cleared = await script_index_service.clear_project_knowledge(
+        session, tenant_id, project_id
+    )
+    return {
+        "deleted": True,
+        "id": project_id,
+        "name": project.get("name") or "",
+        "knowledge": knowledge_cleared,
+    }
+
+
 async def add_script(
     session: AsyncSession, tenant_id: str, project_id: str, payload: dict
 ) -> dict:

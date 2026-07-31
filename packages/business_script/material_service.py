@@ -12,7 +12,13 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.business_script import knowledge_context, llm, parse_service, project_service
+from packages.business_script import (
+    consistency_context,
+    knowledge_context,
+    llm,
+    parse_service,
+    project_service,
+)
 from packages.domain.errors import NotFoundError, ValidationAppError
 from packages.domain.ids import new_id
 
@@ -60,12 +66,15 @@ async def generate_material_prompts(
     session: AsyncSession, tenant_id: str, project_id: str
 ) -> dict:
     assets = await parse_service.get_assets(session, tenant_id, project_id)
-    project = assets["project"]
-    style_bible = project.get("style_bible")
-    if not style_bible:
-        raise ValidationAppError("项目尚未解析，缺少 style_bible")
     if not assets["characters"] and not assets["props"]:
         raise ValidationAppError("项目无人物或道具资产，无法生成物料提示词")
+    pack = await consistency_context.assemble_pack(
+        session,
+        tenant_id,
+        project_id,
+        include_craft=False,
+    )
+    style_bible = pack["style_bible"]
 
     craft = await knowledge_context.assemble_material_knowledge(tenant_id=tenant_id)
     system_base = llm.load_prompt("agents/asset-planner/prompts/system.md")
@@ -76,7 +85,10 @@ async def generate_material_prompts(
             + "\n\n以下是已检索到的工艺规范（硬性约束，冲突时以之为准）：\n"
             + craft
         )
-    system_prompt += "\n\n只输出 JSON，不要 markdown 说明。"
+    system_prompt = (
+        system_prompt + "\n\n" + pack["prompt_block"]
+        + "\n\n只输出 JSON，不要 markdown 说明。"
+    )
 
     # 已有 confirmed 提示词的目标跳过；ai 版本先删再生成
     confirmed_targets = {

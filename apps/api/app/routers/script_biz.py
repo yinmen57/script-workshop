@@ -83,6 +83,31 @@ async def get_project(project_id: str, auth: AuthDep, session: DbSession) -> dic
     return await project_service.get_project(session, auth.tenant_id, project_id)
 
 
+@router.delete("/projects/{project_id}")
+async def delete_project(
+    project_id: str,
+    auth: AuthDep,
+    session: DbSession,
+    request_id: RequestIdDep,
+) -> dict:
+    """删除项目及其全部下游数据，不可恢复。"""
+    auth.require(APP_WRITE)
+    data = await project_service.delete_project(
+        session, auth.tenant_id, project_id
+    )
+    await write_audit(
+        session,
+        tenant_id=auth.tenant_id,
+        actor=auth.actor,
+        action="script_biz.project.delete",
+        request_id=request_id,
+        resource_type="script_project",
+        resource_id=project_id,
+        payload={"name": data.get("name")},
+    )
+    return data
+
+
 @router.post("/projects/{project_id}/scripts")
 async def add_script(
     project_id: str,
@@ -302,6 +327,21 @@ async def segment_structure(
     return data
 
 
+@router.get("/projects/{project_id}/knowledge/status")
+async def get_project_knowledge_status(
+    project_id: str,
+    auth: AuthDep,
+    session: DbSession,
+) -> dict:
+    """工作台事实 vs 项目知识库索引状态（知识库是可重建检索副本）。"""
+    auth.require(APP_READ)
+    from packages.business_script import script_index_service
+
+    return await script_index_service.get_project_knowledge_status(
+        session, auth.tenant_id, project_id
+    )
+
+
 @router.post("/projects/{project_id}/knowledge/index")
 async def index_project_knowledge(
     project_id: str,
@@ -309,7 +349,7 @@ async def index_project_knowledge(
     session: DbSession,
     request_id: RequestIdDep,
 ) -> dict:
-    """投递知识库索引作业：按叙事空间覆盖写入项目命名空间。"""
+    """投递知识库索引作业：从工作台事实重建叙事空间/人物/场景检索副本。"""
     auth.require(APP_WRITE)
     data = await job_service.submit_job(
         session,
@@ -317,7 +357,7 @@ async def index_project_knowledge(
         project_id=project_id,
         kind=job_service.KIND_INDEX_NARRATIVE,
         dedupe_key=f"index_narrative:{project_id}",
-        label="索引叙事空间",
+        label="索引项目知识库",
         payload={},
         created_by=auth.actor,
     )

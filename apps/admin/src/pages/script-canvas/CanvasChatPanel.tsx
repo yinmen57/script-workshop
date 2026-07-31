@@ -1,6 +1,7 @@
 /**
  * 画布旁对话入口：与调试台共用 streamChatCompletions，
  * step 同步到画布节点（D3 双模式）。
+ * 选中上下文以 selection 结构化传递，不再拼进用户原文。
  */
 import { Button, Input, Space, Typography } from "antd";
 import { useRef, useState } from "react";
@@ -32,16 +33,22 @@ export function CanvasChatPanel({ spaceId, projectId, onStep }: Props) {
     setAnswer("");
     setStreaming(true);
     abortRef.current = new AbortController();
-    const hint = [
-      projectId ? `project_id=${projectId}` : "",
-      `narrative_space_id=${spaceId}`,
-      text,
-    ]
-      .filter(Boolean)
-      .join("\n");
     try {
       await streamChatCompletions(
-        { slug: SLUG, session_id: sessionId, message: hint },
+        {
+          slug: SLUG,
+          session_id: sessionId,
+          message: text,
+          selection: {
+            project_id: projectId,
+            selection: {
+              type: "narrative_space",
+              id: spaceId,
+              narrative_space_id: spaceId,
+              title: "当前画布叙事空间",
+            },
+          },
+        },
         {
           onDelta: (t) => setAnswer((prev) => prev + t),
           onStep: (step) => onStep(step),
@@ -82,8 +89,13 @@ export function CanvasChatPanel({ spaceId, projectId, onStep }: Props) {
         </Button>
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-        与画布共用工具；轨迹 step 会刷新节点状态。
+        与画布共用工具；当前叙事空间已作为 selection 传入。轨迹 step 会刷新节点状态。
       </Typography.Paragraph>
+      {projectId ? (
+        <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginBottom: 8 }}>
+          选中：叙事空间 {spaceId}
+        </Typography.Text>
+      ) : null}
       <div
         style={{
           minHeight: 80,

@@ -48,7 +48,8 @@ def login(client: httpx.Client, account: str, password: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--slug", required=True, help="apps-space 下的应用空间目录名")
-    parser.add_argument("--api-base", default="http://127.0.0.1:8000")
+    # 与 docker-compose 宿主机映射一致（容器内仍是 8000）
+    parser.add_argument("--api-base", default="http://127.0.0.1:42867")
     parser.add_argument("--account", default="admin")
     parser.add_argument("--password", default="Admin@123456")
     parser.add_argument("--check", default="", help="索引完成后用该问题做一次检索自检")

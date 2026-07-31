@@ -4,6 +4,7 @@ description: 规划分镜、划分视频片段并生成成片视频提示词。
 system_prompt: prompts/system.md
 max_steps: 10
 tools:
+  - inspect
   - plan-shots
   - plan-video-segments
   - generate-video-prompts

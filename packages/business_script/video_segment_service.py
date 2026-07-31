@@ -1,12 +1,14 @@
 """视频片段：叙事空间内的成片生成单元，单段不超过模型上限。
 
-叙事空间按语义切，长度不设限；能不能一次生成出来是模型的物理约束，
-因此在这一层按分镜顺序累加时长分组，一组即一次生视频调用。
-分组是机械约束，不进 LLM。
+叙事空间按语义切，长度不设限；能不能一次生成出来是模型的物理约束。
+片段边界由 LLM 按分镜内容判定：哪几个连续分镜是一次运镜能连贯拍完的，
+就编成一个片段。时长上限只作硬校验，不用来机械累加分组。
+LLM 只回答镜号区间，正文与时长由服务端按镜号重算。
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -14,6 +16,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.business_script import (
+    knowledge_context,
+    llm,
     project_service,
     revision_service,
     shot_service,
@@ -24,6 +28,10 @@ from packages.domain.ids import new_id
 
 # 视频模型单次生成上限（秒）
 MAX_SEGMENT_DURATION_SEC = 15.0
+# 逐空间并发编组的上限，避免打爆 LLM 网关
+_MAX_CONCURRENCY = 4
+# 浮点累加误差容忍
+_DURATION_EPSILON = 0.01
 
 
 def _segment_public(row: dict[str, Any]) -> dict[str, Any]:
@@ -157,12 +165,31 @@ async def plan_segments_for_project(
             {"project_id": project_id, "tenant_id": tenant_id},
         )
     ).mappings().all()
-    results: list[dict[str, Any]] = []
-    for space in spaces:
-        results.append(
-            await plan_segments_for_space(
-                session, tenant_id, space["id"], commit=False
+    if not spaces:
+        return {"spaces": [], "space_count": 0, "total": 0}
+
+    prepared: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for row in spaces:
+        prepared.append(await _prepare_space(session, tenant_id, row["id"]))
+
+    system_prompt, template = await _load_prompts(tenant_id)
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
+
+    async def run_space(
+        space: dict[str, Any], shots: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        async with semaphore:
+            return await _group_shots_by_llm(
+                space, shots, system_prompt=system_prompt, template=template
             )
+
+    grouped = await asyncio.gather(
+        *(run_space(space, shots) for space, shots in prepared)
+    )
+    results: list[dict[str, Any]] = []
+    for (space, _), groups in zip(prepared, grouped, strict=True):
+        results.append(
+            await _persist_groups(session, tenant_id, space, groups)
         )
     await session.commit()
     return {
@@ -173,14 +200,23 @@ async def plan_segments_for_project(
 
 
 async def plan_segments_for_space(
-    session: AsyncSession,
-    tenant_id: str,
-    narrative_space_id: str,
-    *,
-    commit: bool = True,
+    session: AsyncSession, tenant_id: str, narrative_space_id: str
 ) -> dict:
+    space, shots = await _prepare_space(session, tenant_id, narrative_space_id)
+    system_prompt, template = await _load_prompts(tenant_id)
+    groups = await _group_shots_by_llm(
+        space, shots, system_prompt=system_prompt, template=template
+    )
+    result = await _persist_groups(session, tenant_id, space, groups)
+    await session.commit()
+    return result
+
+
+async def _prepare_space(
+    session: AsyncSession, tenant_id: str, narrative_space_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """取出叙事空间与其分镜，并挡住已确认片段的重排。"""
     space = await _require_space(session, tenant_id, narrative_space_id)
-    project_id = space["project_id"]
 
     confirmed = (
         await session.execute(
@@ -203,12 +239,23 @@ async def plan_segments_for_space(
         await shot_service.list_shots(
             session,
             tenant_id,
-            project_id,
+            space["project_id"],
             narrative_space_id=narrative_space_id,
         )
     )["items"]
     if not shots:
         raise ValidationAppError("该叙事空间尚无分镜，请先规划分镜")
+    return space, shots
+
+
+async def _persist_groups(
+    session: AsyncSession,
+    tenant_id: str,
+    space: dict[str, Any],
+    groups: list[dict[str, Any]],
+) -> dict:
+    narrative_space_id = space["id"]
+    project_id = space["project_id"]
 
     # 片段重排会让旧提示词对不上镜头组，一并清掉 ai 提示词
     await session.execute(
@@ -232,16 +279,13 @@ async def plan_segments_for_space(
         {"ns_id": narrative_space_id, "tenant_id": tenant_id},
     )
 
-    groups = _group_shots(shots)
     space_title = space.get("title") or "叙事空间"
     created: list[dict[str, Any]] = []
     for ordinal, group in enumerate(groups, start=1):
         segment_id = new_id("svs")
         shot_ids = [s["id"] for s in group["shots"]]
-        title = (
-            space_title
-            if len(groups) == 1
-            else f"{space_title} 片段 {ordinal}"
+        title = group["title"] or (
+            space_title if len(groups) == 1 else f"{space_title} 片段 {ordinal}"
         )
         await session.execute(
             text(
@@ -278,8 +322,6 @@ async def plan_segments_for_space(
             }
         )
 
-    if commit:
-        await session.commit()
     return {
         "narrative_space_id": narrative_space_id,
         "items": created,
@@ -300,48 +342,143 @@ def _shot_duration(shot: dict[str, Any]) -> float:
     return structure_parser.estimate_duration_sec(text_value)
 
 
-def _group_shots(shots: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """按分镜顺序累加时长分组，单组不超过模型上限。"""
-    groups: list[dict[str, Any]] = []
-    current: list[dict[str, Any]] = []
-    current_sec = 0.0
+async def _load_prompts(tenant_id: str) -> tuple[str, str]:
+    """编组用的 system / user 模板，附带检索到的镜头组工艺规范。"""
+    craft = await knowledge_context.assemble_video_knowledge(tenant_id=tenant_id)
+    system_prompt = llm.load_prompt("agents/shot-planner/prompts/system.md")
+    if craft:
+        system_prompt += (
+            "\n\n以下是已检索到的工艺规范（硬性约束，冲突时以之为准）：\n" + craft
+        )
+    system_prompt += "\n\n只输出 JSON，不要 markdown 说明。"
+    template = llm.load_prompt(
+        "agents/shot-planner/prompts/group-video-segments.md"
+    )
+    return system_prompt, template
 
-    def flush() -> None:
-        nonlocal current, current_sec
-        if not current:
-            return
-        beats = [
-            (s.get("beat") or s.get("scene_text") or "").strip() for s in current
+
+async def _group_shots_by_llm(
+    space: dict[str, Any],
+    shots: list[dict[str, Any]],
+    *,
+    system_prompt: str,
+    template: str,
+) -> list[dict[str, Any]]:
+    """让 LLM 按分镜内容判定片段边界，只接受镜号区间。"""
+    user_prompt = llm.render_prompt(
+        template,
+        narrative_space={
+            "id": space["id"],
+            "title": space.get("title") or "",
+            "summary": space.get("summary") or "",
+            "time_place": space.get("time_place") or "",
+            "beat_type": space.get("beat_type") or "",
+            "mood": space.get("mood") or "",
+        },
+        shots=[
+            {
+                "no": i,
+                "beat": shot.get("beat") or "",
+                "scene_text": shot.get("scene_text") or "",
+                "camera": shot.get("camera"),
+                "duration_sec": round(_shot_duration(shot), 2),
+            }
+            for i, shot in enumerate(shots, start=1)
+        ],
+        shot_count=len(shots),
+        max_duration=MAX_SEGMENT_DURATION_SEC,
+    )
+    data = await llm.chat_json(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ]
+    )
+    return _build_groups(data, space=space, shots=shots)
+
+
+def _build_groups(
+    data: dict[str, Any],
+    *,
+    space: dict[str, Any],
+    shots: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """校验 LLM 镜号区间并按镜号重组片段；不合法直接失败，不做兜底分组。"""
+    raw = data.get("segments")
+    if not isinstance(raw, list) or not raw:
+        raise ValidationAppError(
+            f"叙事空间 {space['id']} 的视频片段编组结果为空"
+        )
+
+    total = len(shots)
+    items: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        start = _to_int(entry.get("start_shot"))
+        end = _to_int(entry.get("end_shot"))
+        if start is None or end is None:
+            raise ValidationAppError(
+                f"叙事空间 {space['id']} 的片段编组缺少镜号"
+            )
+        if start < 1 or end > total or start > end:
+            raise ValidationAppError(
+                f"叙事空间 {space['id']} 片段镜号越界：{start}-{end}，共 {total} 镜"
+            )
+        items.append({**entry, "start": start, "end": end})
+
+    items.sort(key=lambda x: x["start"])
+    cursor = 0
+    for item in items:
+        if item["start"] != cursor + 1:
+            raise ValidationAppError(
+                f"叙事空间 {space['id']} 片段镜号不连续：第 {cursor + 1} 镜未被覆盖"
+            )
+        cursor = item["end"]
+    if cursor != total:
+        raise ValidationAppError(
+            f"叙事空间 {space['id']} 片段镜号未覆盖到结尾：止于第 {cursor} 镜，共 {total} 镜"
+        )
+
+    groups: list[dict[str, Any]] = []
+    for item in items:
+        members = shots[item["start"] - 1 : item["end"]]
+        duration = sum(_shot_duration(s) for s in members)
+        # 单镜本身超上限只能独立成段，由下游按上限截断；多镜超上限说明编组无效
+        if duration > MAX_SEGMENT_DURATION_SEC + _DURATION_EPSILON and len(members) > 1:
+            raise ValidationAppError(
+                f"叙事空间 {space['id']} 第 {item['start']}-{item['end']} 镜合计 "
+                f"{duration:.1f} 秒，超过单段上限 {MAX_SEGMENT_DURATION_SEC:.0f} 秒"
+            )
         body = "\n".join(
-            (s.get("scene_text") or s.get("beat") or "").strip() for s in current
+            (s.get("scene_text") or s.get("beat") or "").strip() for s in members
         ).strip()
+        summary = (item.get("summary") or "").strip()
+        if not summary:
+            beats = [
+                (s.get("beat") or s.get("scene_text") or "").strip() for s in members
+            ]
+            summary = " / ".join(b for b in beats if b)
         groups.append(
             {
-                "shots": current,
-                "summary": " / ".join(b for b in beats if b)[:2000],
+                "shots": members,
+                "title": (item.get("title") or "").strip()[:256],
+                "summary": summary[:2000],
+                "group_reason": (item.get("group_reason") or "").strip(),
                 "source_text": body,
-                "duration_sec": round(min(current_sec, MAX_SEGMENT_DURATION_SEC), 2),
+                "duration_sec": round(
+                    min(duration, MAX_SEGMENT_DURATION_SEC), 2
+                ),
             }
         )
-        current = []
-        current_sec = 0.0
-
-    for shot in shots:
-        duration = _shot_duration(shot)
-        # 单个分镜就超上限：独立成段，下游按上限截断
-        if duration >= MAX_SEGMENT_DURATION_SEC:
-            flush()
-            current = [shot]
-            current_sec = duration
-            flush()
-            continue
-        if current and current_sec + duration > MAX_SEGMENT_DURATION_SEC:
-            flush()
-        current.append(shot)
-        current_sec += duration
-    flush()
     return groups
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 async def confirm_segment(

@@ -101,6 +101,15 @@ export async function getScriptProject(projectId: string) {
   return data;
 }
 
+export async function deleteScriptProject(projectId: string) {
+  const { data } = await api.delete<{
+    deleted: boolean;
+    id: string;
+    name: string;
+  }>(`/script-biz/projects/${projectId}`);
+  return data;
+}
+
 export type JobRun = {
   id: string;
   project_id: string;
@@ -217,6 +226,33 @@ export async function segmentScriptStructure(
     body || {},
   );
   return waitJob(data.id);
+}
+
+export type ProjectKnowledgeStatus = {
+  project_id: string;
+  namespace: string;
+  status: "empty" | "not_indexed" | "indexed" | string;
+  source_of_truth: string;
+  role: string;
+  workspace: {
+    narrative_space_count: number;
+    character_count: number;
+    scene_space_count: number;
+    fact_document_estimate: number;
+  };
+  index: {
+    chunk_count: number;
+    updated_at: string | null;
+    collection: string | null;
+  };
+  craft_namespaces: string[];
+};
+
+export async function getProjectKnowledgeStatus(projectId: string) {
+  const { data } = await api.get<ProjectKnowledgeStatus>(
+    `/script-biz/projects/${projectId}/knowledge/status`,
+  );
+  return data;
 }
 
 export async function indexProjectKnowledge(projectId: string) {

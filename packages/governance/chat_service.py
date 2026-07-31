@@ -171,6 +171,33 @@ def _build_chat_adapter(app: dict) -> OpenAICompatibleChatAdapter:
     )
 
 
+def _format_selection_block(selection: dict[str, Any] | None) -> str:
+    """把前端结构化选中对象拼成系统前缀，避免把 id 塞进用户原文。"""
+    if not selection or not isinstance(selection, dict):
+        return ""
+    project_id = selection.get("project_id")
+    sel = selection.get("selection") if isinstance(selection.get("selection"), dict) else selection
+    lines = ["当前工作台选中上下文（结构化，勿编造未列出的 id）："]
+    if project_id:
+        lines.append(f"- project_id: {project_id}")
+    for key in (
+        "type",
+        "id",
+        "episode_id",
+        "narrative_space_id",
+        "video_segment_id",
+        "shot_id",
+        "title",
+    ):
+        value = sel.get(key) if isinstance(sel, dict) else None
+        if value:
+            lines.append(f"- {key}: {value}")
+    lines.append(
+        "若用户文字指向的对象与上述选中冲突，先向用户确认，不要静默选择其中一个。"
+    )
+    return "\n".join(lines)
+
+
 async def prepare_completion(
     session: AsyncSession,
     *,
@@ -180,6 +207,7 @@ async def prepare_completion(
     session_id: str | None,
     message: str,
     request_id: str,
+    selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not slug or not message.strip():
         raise ValidationAppError("slug and message required")
@@ -197,11 +225,16 @@ async def prepare_completion(
     )
 
     history = await list_messages(session, tenant_id, sid)
+    system_content = app.get("system_prompt") or (
+        "你是企业助手。需要时请调用可用工具完成任务。"
+    )
+    selection_block = _format_selection_block(selection)
+    if selection_block:
+        system_content = system_content + "\n\n" + selection_block
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
-            "content": app.get("system_prompt")
-            or "你是企业助手。需要时请调用可用工具完成任务。",
+            "content": system_content,
         }
     ]
     for item in history[-12:]:

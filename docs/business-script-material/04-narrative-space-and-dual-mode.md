@@ -88,9 +88,11 @@ flowchart LR
 
 ### 2.2.1 视频片段怎么切
 
-纯机械分组，不进 LLM：按分镜顺序累加 `duration_sec`，累计将超过模型单次生成上限（当前 **15 秒**）就断开为下一片段。单个分镜本身超上限时独立成段，由下游按上限截断。
+由 LLM 按**分镜内容**判定边界：哪几个连续分镜是一次运镜能连贯拍完的，就编成一个片段。地点跳转、时间跳跃、情绪反转、动作主体切换处必须断开；一个完整动作或一次完整交锋不拆到两个片段。
 
-分组只在分镜规划完成后进行；重新划分片段会清掉该空间下未确认的成片提示词，因为镜头组变了旧提示词就对不上。
+模型单次生成上限（当前 **15 秒**）只作天花板校验，不用来累加凑数：某组多镜合计超限即判编组无效，直接失败；单个分镜本身超上限时独立成段，由下游按上限截断。
+
+编组只在分镜规划完成后进行；重新编组会清掉该空间下未确认的成片提示词，因为镜头组变了旧提示词就对不上。
 
 ### 2.3 一致性锚点的归属层级
 
@@ -181,7 +183,7 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 不设审批流（无提交 / 审核 / 退回），状态只有 `ai` / `confirmed`。
 机制详见 [06-material-library-adoption.md 第 5 节](./06-material-library-adoption.md#5-新锁定决策定版--废稿历史--反悔)。
 
-### D6 集边界用规则，叙事空间边界用 LLM
+### D6 集边界用规则，叙事空间与片段边界用 LLM
 
 集边界、行类型分类、元数据提取由正则与规则完成，稳定且零成本。支持输入：`txt` / `md` / `docx` / `fdx`。集边界从稿面标记识别（如 `剧集 [N]`）。
 
@@ -196,7 +198,7 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 
 正文由服务端按段号重组，模型不接触正文写入路径。段号必须连续覆盖全集，出现重叠、跳段或遗漏直接判失败，不做兜底切分。
 
-视频片段的分组是机械约束，仍然不进 LLM（见 2.2.1）。
+视频片段的编组同样是主观判断，走 LLM，协议与上表同构：送入叙事空间信息 + 编号后的分镜清单（含各镜时长），返回**起止镜号** + 标题 / 梗概 / 编组理由，正文与时长由服务端按镜号重算。镜号必须连续覆盖全部分镜，越界、跳镜或某组合计超过时长上限直接判失败（见 2.2.1）。
 
 ## 5. 七类结构化数据的落位
 
@@ -240,11 +242,17 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 | `video_prompt` | `video_segment_id`（不是 `shot_id`，也不再是 `narrative_space_id`） |
 | `video_job` | 仍挂 `video_prompt_id`；一片段一任务 |
 
-### 6.3 知识库索引粒度
+### 6.3 工作台与知识库职责
 
-项目命名空间 `script/project/{project_id}` 按**叙事空间**覆盖写入，一个空间一条，payload 带 `episode_ordinal` / `narrative_space_id` / `title` / `time_place` / `beat_type` / `mood`，可按集过滤，命中后能回溯到具体场次。
+| 层 | 职责 | 是否唯一事实 |
+|----|------|-------------|
+| 工作台 DB | `style_bible` / `character_asset` / `scene_space` / `costume_change` / 确认状态 / 参考图指针 | **是** |
+| 项目知识库 `script/project/{project_id}` | 叙事空间 + 人物 + 场景的可重建检索副本 | 否 |
+| 工艺知识库 `script/craft/*` | prompting / cinematography / visual-style / consistency 规范 | 否（规范） |
 
-上传时不再按长度盲切入库：盲切会把一场戏拆散，检索回来的片段没有场次归属。索引在结构切分完成后单独触发。
+生成前组装 **ConsistencyPack**（DB 事实 + 可选工艺规范），冲突时以工作台 confirmed 资产为准，知识库不得覆盖。
+
+项目索引覆盖写入：叙事空间 / 人物 / 场景各一条文档，payload 带 `doc_type` 与源记录 id / `record_status` / `source_updated_at`。上传时不盲切；结构切分与资产就绪后单独触发。删除项目时同步清理项目向量命名空间。
 
 ## 7. 落地顺序
 
@@ -277,5 +285,5 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 - 不为画布单独实现一套编排（D3）
 - 不做画布内时间轴剪辑
 - 不做两种模式之间的迁移向导
-- 不用 LLM 切集边界，也不用 LLM 分视频片段（D6）
+- 不用 LLM 切集边界（D6）
 - 不做视频片段之间的自动拼接与转场渲染

@@ -1,6 +1,13 @@
 id: plan-video-segments
 name: 划分视频片段
-description: 把叙事空间的分镜按视频模型单次生成上限分成若干视频片段，一片段一次生成。可指定 narrative_space_id；缺省则处理项目下已有分镜的全部空间。
+description: |
+  把叙事空间的分镜编成视频片段，由模型按分镜内容判定哪几镜能一次连贯拍完；单段不超过 15 秒。
+  用途：分镜已规划，准备生成成片提示词之前。
+  前置：该空间必须已有分镜；且没有已确认的视频片段。
+  产出：video_segment；重跑会清掉该空间下未确认片段与成片提示词。
+  是否修改数据：是。
+  是否产生费用：调用 LLM。
+  不适用：不要用它生成提示词或视频；不要把它当成按时长机械凑数的工具。
 risk_level: low
 entrypoint: src/tools.py:plan_video_segments
 parameters:
@@ -8,6 +15,8 @@ parameters:
   properties:
     project_id:
       type: string
+      description: 剧本项目 id
     narrative_space_id:
       type: string
+      description: 可选；只编这一个叙事空间。缺省则编项目下已有分镜且无确认片段的空间
   required: [project_id]

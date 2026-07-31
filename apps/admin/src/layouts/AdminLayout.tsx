@@ -1,4 +1,8 @@
-import { AppstoreOutlined, LogoutOutlined, ReadOutlined } from "@ant-design/icons";
+import {
+  AppstoreOutlined,
+  LogoutOutlined,
+  PartitionOutlined,
+} from "@ant-design/icons";
 import { Layout, Menu, Typography, Button, Space } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../stores/auth";
@@ -7,7 +11,7 @@ const { Header, Sider, Content } = Layout;
 
 const menuItems = [
   { key: "/apps", icon: <AppstoreOutlined />, label: "应用空间" },
-  { key: "/script-biz", icon: <ReadOutlined />, label: "剧本工坊" },
+  { key: "/script-workspace", icon: <PartitionOutlined />, label: "剧本工作台" },
 ];
 
 export function AdminLayout() {
@@ -19,8 +23,8 @@ export function AdminLayout() {
 
   const selectedKey = location.pathname.startsWith("/apps")
     ? "/apps"
-    : location.pathname.startsWith("/script-biz")
-      ? "/script-biz"
+    : location.pathname.startsWith("/script-workspace")
+      ? "/script-workspace"
       : location.pathname;
 
   return (

@@ -4,6 +4,7 @@ description: 提交生图/生视频任务并查询状态。
 system_prompt: prompts/system.md
 max_steps: 8
 tools:
+  - inspect
   - render-material-image
   - render-video
   - retrieve

@@ -13,3 +13,7 @@ namespaces:
   - namespace: script/craft/visual-style
     dir: craft-visual-style
     description: 生图/生视频模型参数规范、光影调色模板、内容安全红线
+
+  - namespace: script/craft/consistency
+    dir: craft-consistency
+    description: 人物一致性、场景一致性与风格锁定规范；事实仍以业务资产为准

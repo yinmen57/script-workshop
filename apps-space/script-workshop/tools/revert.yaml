@@ -1,0 +1,19 @@
+id: revert
+name: 反悔写回
+description: |
+  根据废稿历史 revision_id，把历史快照写回主记录。
+  用途：用户明确要求反悔、回退到某一版时使用。
+  前置：必须有明确的 revision_id（可先通过业务列表或历史接口取得）。
+  产出：目标记录恢复为该 revision 内容；写回前会快照当前内容。
+  是否修改数据：是。
+  是否产生费用：否。
+  不适用：没有 revision_id 时不要猜测；不要用它代替 confirm。
+risk_level: medium
+entrypoint: src/tools.py:revert
+parameters:
+  type: object
+  properties:
+    revision_id:
+      type: string
+      description: 废稿历史记录 id，形如 srev_xxx
+  required: [revision_id]

@@ -1,6 +1,13 @@
 id: segment-narrative
 name: 语义切分叙事空间
-description: 逐集判定叙事空间的语义边界并落库。规则粗切只看地点与转场字面信号，本工具按一场戏的完整性重新判定。缺省 script_text 时取项目最新剧本。
+description: |
+  逐集用 LLM 判定叙事空间语义边界，只收段号不收正文。
+  用途：规则粗切后需要按「同一场戏」精修边界。
+  前置：项目已有剧本文档；建议先有 parse-structure 粗切基线。
+  产出：叙事空间落库（含 beat_type / mood / boundary_reason）。
+  是否修改数据：是，会清理未确认的叙事空间及其下游 ai 产物。
+  是否产生费用：调用 LLM。
+  不适用：不要用时长凑数切空间；视频片段编组是 plan-video-segments。
 risk_level: low
 entrypoint: src/tools.py:segment_narrative
 parameters:
@@ -8,6 +15,8 @@ parameters:
   properties:
     project_id:
       type: string
+      description: 剧本项目 id
     script_text:
       type: string
+      description: 可选；缺省时取项目最新剧本
   required: [project_id]

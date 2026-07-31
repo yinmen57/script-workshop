@@ -48,7 +48,7 @@ def _job_public(row: dict[str, Any]) -> dict[str, Any]:
             return v.isoformat(sep=" ", timespec="milliseconds")
         return str(v)
 
-    return {
+    public = {
         "id": row["id"],
         "tenant_id": row["tenant_id"],
         "project_id": row["project_id"],
@@ -65,6 +65,80 @@ def _job_public(row: dict[str, Any]) -> dict[str, Any]:
         "created_at": _ts(row.get("created_at")),
         "started_at": _ts(row.get("started_at")),
         "finished_at": _ts(row.get("finished_at")),
+    }
+    public.update(_recovery_fields(public))
+    return public
+
+
+def _business_object_from_payload(
+    kind: str, payload: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    payload = payload or {}
+    if payload.get("video_segment_id"):
+        return {"type": "video_segment", "id": payload["video_segment_id"]}
+    if payload.get("narrative_space_id"):
+        return {"type": "narrative_space", "id": payload["narrative_space_id"]}
+    if payload.get("video_prompt_id"):
+        return {"type": "video_prompt", "id": payload["video_prompt_id"]}
+    if payload.get("material_prompt_id"):
+        return {"type": "material_prompt", "id": payload["material_prompt_id"]}
+    if kind in {
+        KIND_PARSE,
+        KIND_STRUCTURE,
+        KIND_SEGMENT,
+        KIND_INDEX_NARRATIVE,
+        KIND_MATERIAL,
+        KIND_PLAN_SHOTS,
+        KIND_VIDEO_SEGMENTS,
+        KIND_VIDEO_PROMPTS,
+    }:
+        return None
+    return None
+
+
+def _recovery_fields(job: dict[str, Any]) -> dict[str, Any]:
+    status = job.get("status")
+    progress = int(job.get("progress") or 0)
+    if status in ACTIVE_STATUSES:
+        step = "queued" if status == "queued" else f"running@{progress}"
+    elif status == "done":
+        step = "done"
+    elif status == "failed":
+        step = "failed"
+    else:
+        step = status or "unknown"
+    return {
+        "current_step": step,
+        "business_object": _business_object_from_payload(
+            job.get("kind") or "", job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        ),
+        "retryable": status == "failed",
+        "waiting_confirmation": False,
+        "has_result": bool(job.get("result")),
+    }
+
+
+def job_recovery_view(job: dict[str, Any]) -> dict[str, Any]:
+    """供 inspect / 选择 Agent 使用的任务恢复摘要。"""
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+    return {
+        "id": job["id"],
+        "project_id": job["project_id"],
+        "kind": job["kind"],
+        "dedupe_key": job.get("dedupe_key"),
+        "label": job.get("label") or "",
+        "status": job["status"],
+        "progress": int(job.get("progress") or 0),
+        "current_step": job.get("current_step"),
+        "business_object": job.get("business_object")
+        or _business_object_from_payload(job.get("kind") or "", payload),
+        "error": job.get("error"),
+        "retryable": bool(job.get("retryable")),
+        "waiting_confirmation": bool(job.get("waiting_confirmation")),
+        "has_result": bool(job.get("has_result") or job.get("result")),
+        "result": job.get("result") if job.get("status") == "done" else None,
+        "created_at": job.get("created_at"),
+        "finished_at": job.get("finished_at"),
     }
 
 

@@ -13,6 +13,7 @@ from packages.governance import vector_namespace_service
 CRAFT_PROMPTING = "script/craft/prompting"
 CRAFT_VISUAL = "script/craft/visual-style"
 CRAFT_CINEMA = "script/craft/cinematography"
+CRAFT_CONSISTENCY = "script/craft/consistency"
 
 
 def format_citations(result: dict[str, Any], *, max_chars: int = 6000) -> str:
@@ -81,11 +82,26 @@ async def assemble_segment_knowledge(*, tenant_id: str) -> str:
     return "## 叙事切分规范\n" + text
 
 
-async def assemble_material_knowledge(*, tenant_id: str) -> str:
-    """物料提示词生成：prompting + visual-style。"""
+async def assemble_consistency_knowledge(
+    *, tenant_id: str, query: str = "人物一致性 场景一致性 风格锁定"
+) -> str:
+    """一致性规范：不替代 DB 资产，只约束写法。"""
     text = await retrieve_craft(
         tenant_id=tenant_id,
-        namespaces=[CRAFT_PROMPTING, CRAFT_VISUAL],
+        namespaces=[CRAFT_CONSISTENCY, CRAFT_PROMPTING],
+        query=query,
+        top_k=5,
+    )
+    if not text:
+        return ""
+    return "## 一致性规范\n" + text
+
+
+async def assemble_material_knowledge(*, tenant_id: str) -> str:
+    """物料提示词生成：prompting + visual-style + consistency。"""
+    text = await retrieve_craft(
+        tenant_id=tenant_id,
+        namespaces=[CRAFT_PROMPTING, CRAFT_VISUAL, CRAFT_CONSISTENCY],
         query="物料提示词 一致性锁定 三视图 视觉风格 分辨率 内容安全",
         top_k=6,
     )
@@ -95,11 +111,11 @@ async def assemble_material_knowledge(*, tenant_id: str) -> str:
 
 
 async def assemble_shot_knowledge(*, tenant_id: str) -> str:
-    """分镜规划：镜头语言 + 分镜模板节奏。"""
+    """分镜规划：镜头语言 + 分镜模板节奏 + 一致性。"""
     text = await retrieve_craft(
         tenant_id=tenant_id,
-        namespaces=[CRAFT_CINEMA, CRAFT_PROMPTING],
-        query="分镜 景别 镜头语言 节奏 时长 分镜模板",
+        namespaces=[CRAFT_CINEMA, CRAFT_PROMPTING, CRAFT_CONSISTENCY],
+        query="分镜 景别 镜头语言 节奏 时长 分镜模板 人物场景一致性",
         top_k=6,
     )
     if not text:
@@ -108,10 +124,10 @@ async def assemble_shot_knowledge(*, tenant_id: str) -> str:
 
 
 async def assemble_video_knowledge(*, tenant_id: str) -> str:
-    """成片视频提示词：多镜合并写法 + 运镜与时长。"""
+    """成片视频提示词：多镜合并写法 + 运镜与时长 + 一致性。"""
     text = await retrieve_craft(
         tenant_id=tenant_id,
-        namespaces=[CRAFT_CINEMA, CRAFT_PROMPTING, CRAFT_VISUAL],
+        namespaces=[CRAFT_CINEMA, CRAFT_PROMPTING, CRAFT_VISUAL, CRAFT_CONSISTENCY],
         query="镜头组 成片 视频提示词 运镜 切换 时长 一致性锁定",
         top_k=6,
     )

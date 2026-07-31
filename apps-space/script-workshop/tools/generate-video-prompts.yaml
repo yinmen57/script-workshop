@@ -1,6 +1,14 @@
 id: generate-video-prompts
 name: 生成成片视频提示词
-description: 按视频片段聚合其包含的分镜，生成一段成片视频提示词（D1）。可指定 video_segment_id 只做一段，或指定 narrative_space_id 做该空间全部片段；缺省则处理项目下尚未有确认提示词的全部片段。
+description: |
+  按视频片段聚合其包含的分镜，生成一段成片视频提示词（D1）。
+  用途：片段已编好，需要出成片提示词时。
+  前置：项目有 style_bible；目标片段存在且含分镜；没有已确认提示词。
+  传参优先：video_segment_id 只做一段；narrative_space_id 做该空间全部片段；都缺省则批量。
+  产出：video_prompt。
+  是否修改数据：是，重跑只清 ai。
+  是否产生费用：调用 LLM；真正生视频是 render-video。
+  不适用：不要在没有片段时直接调用；不要与 generate-material-prompts 混淆。
 risk_level: low
 entrypoint: src/tools.py:generate_video_prompts
 parameters:
@@ -8,8 +16,11 @@ parameters:
   properties:
     project_id:
       type: string
+      description: 剧本项目 id
     video_segment_id:
       type: string
+      description: 可选；只为这一个视频片段生成
     narrative_space_id:
       type: string
+      description: 可选；为该叙事空间下全部片段生成。与 video_segment_id 同时存在时优先 video_segment_id
   required: [project_id]

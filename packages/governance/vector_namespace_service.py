@@ -416,6 +416,78 @@ async def search(
     }
 
 
+async def clear_namespace(
+    session: AsyncSession, tenant_id: str, *, namespace: str
+) -> dict:
+    """清空命名空间向量点并重置计数；不存在则视为已清空。"""
+    namespace = namespace.strip()
+    if not namespace:
+        raise ValidationAppError("namespace required")
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT collection FROM vector_namespace
+                WHERE tenant_id = :tenant_id AND namespace = :namespace
+                """
+            ),
+            {"tenant_id": tenant_id, "namespace": namespace},
+        )
+    ).mappings().first()
+    if not row:
+        return {"namespace": namespace, "cleared": True, "existed": False}
+    client = get_qdrant()
+    client.delete(
+        collection_name=row["collection"],
+        points_selector=qm.FilterSelector(
+            filter=qm.Filter(
+                must=[
+                    qm.FieldCondition(
+                        key="tenant_id", match=qm.MatchValue(value=tenant_id)
+                    ),
+                    qm.FieldCondition(
+                        key="namespace", match=qm.MatchValue(value=namespace)
+                    ),
+                ]
+            )
+        ),
+    )
+    await session.execute(
+        text(
+            """
+            DELETE FROM vector_namespace
+            WHERE tenant_id = :tenant_id AND namespace = :namespace
+            """
+        ),
+        {"tenant_id": tenant_id, "namespace": namespace},
+    )
+    await session.commit()
+    return {"namespace": namespace, "cleared": True, "existed": True}
+
+
+async def get_namespace(
+    session: AsyncSession, tenant_id: str, *, namespace: str
+) -> dict | None:
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT namespace, collection, dimension, chunk_count, updated_at
+                FROM vector_namespace
+                WHERE tenant_id = :tenant_id AND namespace = :namespace
+                """
+            ),
+            {"tenant_id": tenant_id, "namespace": namespace},
+        )
+    ).mappings().first()
+    if row is None:
+        return None
+    return {
+        **dict(row),
+        "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
+    }
+
+
 async def list_namespaces(session: AsyncSession, tenant_id: str) -> dict:
     rows = (
         await session.execute(

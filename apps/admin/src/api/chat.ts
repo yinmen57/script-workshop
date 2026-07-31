@@ -36,11 +36,33 @@ export type StreamHandlers = {
   onError?: (payload: { code: string; message: string }) => void;
 };
 
+export type ChatSelection = {
+  project_id?: string;
+  selection?: {
+    type?: string;
+    id?: string;
+    episode_id?: string;
+    narrative_space_id?: string;
+    video_segment_id?: string;
+    shot_id?: string;
+    title?: string;
+  };
+  // 兼容扁平写法：直接把 type/id 放在顶层
+  type?: string;
+  id?: string;
+  episode_id?: string;
+  narrative_space_id?: string;
+  video_segment_id?: string;
+  shot_id?: string;
+  title?: string;
+};
+
 export async function streamChatCompletions(
   body: {
     slug: string;
     session_id?: string | null;
     message: string;
+    selection?: ChatSelection | null;
   },
   handlers: StreamHandlers,
   signal?: AbortSignal,

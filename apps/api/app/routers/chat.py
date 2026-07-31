@@ -24,6 +24,11 @@ async def chat_completions(
 ):
     auth.require(APP_READ)
     slug = body.get("slug") or ""
+    selection = body.get("selection")
+    if selection is not None and not isinstance(selection, dict):
+        from packages.domain.errors import ValidationAppError
+
+        raise ValidationAppError("selection 必须是对象")
     prepared = await chat_service.prepare_completion(
         session,
         tenant_id=auth.tenant_id,
@@ -32,6 +37,7 @@ async def chat_completions(
         session_id=body.get("session_id"),
         message=body.get("message") or "",
         request_id=request_id,
+        selection=selection,
     )
     await write_audit(
         session,

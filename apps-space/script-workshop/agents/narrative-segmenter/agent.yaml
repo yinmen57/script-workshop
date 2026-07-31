@@ -4,7 +4,9 @@ description: 判定集内叙事空间的语义边界，按段落编号给出起�
 system_prompt: prompts/system.md
 max_steps: 6
 tools:
+  - inspect
   - segment-narrative
+  - index-narrative-knowledge
   - retrieve
 namespaces:
   - script/craft/prompting
