@@ -1,4 +1,7 @@
-"""按 kind 执行剧本作业（Worker 与本地调试共用）。"""
+"""按 kind 执行短业务作业（Celery sync worker）。
+
+生图 / 生视频走 generation_task + gen.*，不在此端到端执行。
+"""
 
 from __future__ import annotations
 
@@ -14,7 +17,6 @@ from packages.business_script import (
     narrative_segment_service,
     parse_service,
     project_service,
-    render_service,
     script_index_service,
     shot_service,
     structure_service,
@@ -28,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 async def execute_job(session: AsyncSession, job: dict[str, Any]) -> dict[str, Any]:
     """执行已 mark_running 的作业，返回 result 摘要。"""
+    from packages.core.tool_context import current_tenant_id
+
     kind = job["kind"]
     tenant_id = job["tenant_id"]
     project_id = job["project_id"]
@@ -40,6 +44,24 @@ async def execute_job(session: AsyncSession, job: dict[str, Any]) -> dict[str, A
 
     await job_service.mark_progress(session, job["id"], 20)
 
+    token = current_tenant_id.set(tenant_id)
+    try:
+        return await _execute_job_body(
+            session, job, kind=kind, tenant_id=tenant_id, project_id=project_id, payload=payload
+        )
+    finally:
+        current_tenant_id.reset(token)
+
+
+async def _execute_job_body(
+    session: AsyncSession,
+    job: dict[str, Any],
+    *,
+    kind: str,
+    tenant_id: str,
+    project_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     if kind == job_service.KIND_PARSE:
         result = await parse_service.parse_project(
             session,
@@ -150,33 +172,10 @@ async def execute_job(session: AsyncSession, job: dict[str, Any]) -> dict[str, A
             "total": result.get("total"),
         }
 
-    if kind == job_service.KIND_RENDER_IMAGE:
-        prompt_id = payload.get("material_prompt_id") or ""
-        if not prompt_id:
-            raise ValidationAppError("缺少 material_prompt_id")
-        result = await render_service.render_material_image(
-            session, tenant_id, prompt_id
+    if kind in job_service.RENDER_KINDS:
+        raise ValidationAppError(
+            f"生成类作业应由 generation_task 调度，不应进入 sync：{kind}"
         )
-        image = result.get("image") or {}
-        return {
-            "material_prompt_id": prompt_id,
-            "image_id": image.get("id"),
-            "url": image.get("url"),
-            "provider_task_id": result.get("provider_task_id"),
-        }
-
-    if kind == job_service.KIND_RENDER_VIDEO:
-        prompt_id = payload.get("video_prompt_id") or ""
-        if not prompt_id:
-            raise ValidationAppError("缺少 video_prompt_id")
-        result = await render_service.render_video(session, tenant_id, prompt_id)
-        vj = result.get("video_job") or {}
-        return {
-            "video_prompt_id": prompt_id,
-            "video_job_id": vj.get("id"),
-            "status": vj.get("status"),
-            "oss_uri": vj.get("oss_uri"),
-        }
 
     raise ValidationAppError(f"未知作业类型：{kind}")
 

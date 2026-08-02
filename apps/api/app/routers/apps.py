@@ -6,7 +6,8 @@ from fastapi import APIRouter
 
 from app.deps import AuthDep, DbSession
 from packages.domain.permissions import APP_READ
-from packages.governance import agent_workspace_service, vector_namespace_service
+from packages.agent_apps import registry
+from packages.governance import vector_namespace_service
 
 router = APIRouter(prefix="/apps", tags=["apps"])
 
@@ -14,13 +15,13 @@ router = APIRouter(prefix="/apps", tags=["apps"])
 @router.get("")
 async def list_apps(auth: AuthDep) -> dict:
     auth.require(APP_READ)
-    return agent_workspace_service.list_workspaces(auth.tenant_id)
+    return registry.list_workspaces(auth.tenant_id)
 
 
 @router.get("/{slug}")
 async def get_workspace(slug: str, auth: AuthDep, session: DbSession) -> dict:
     auth.require(APP_READ)
-    data = agent_workspace_service.get_workspace(auth.tenant_id, slug)
+    data = registry.get_workspace(auth.tenant_id, slug)
     indexed = await vector_namespace_service.list_namespaces(session, auth.tenant_id)
     by_ns = {item["namespace"]: item for item in indexed.get("items") or []}
     knowledge = []

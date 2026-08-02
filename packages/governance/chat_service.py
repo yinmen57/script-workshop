@@ -10,12 +10,10 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.adapters.llm_openai import OpenAICompatibleChatAdapter
-from packages.core.agent_runtime import iter_agent_run
+from packages.agent_apps.runtime import iter_agent_run
 from packages.domain.errors import NotFoundError, ValidationAppError
 from packages.domain.ids import new_id
-from packages.governance import agent_run_service, app_service
-from packages.infra.config import get_settings
+from packages.governance import agent_run_service, app_service, model_service
 
 
 async def ensure_chat_schema(session: AsyncSession) -> None:
@@ -155,22 +153,6 @@ async def list_sessions(
     }
 
 
-def _build_chat_adapter(app: dict) -> OpenAICompatibleChatAdapter:
-    settings = get_settings()
-    primary = (app.get("model") or {}).get("primary") or "default"
-    if primary != "default":
-        raise ValidationAppError(f"未知模型逻辑名：{primary}（当前仅支持 default）")
-    timeout_ms = int(
-        (app.get("model") or {}).get("timeout_ms") or settings.llm_timeout * 1000
-    )
-    return OpenAICompatibleChatAdapter(
-        settings.llm_base_url,
-        settings.llm_api_key,
-        settings.llm_model,
-        timeout_ms=timeout_ms,
-    )
-
-
 def _format_selection_block(selection: dict[str, Any] | None) -> str:
     """把前端结构化选中对象拼成系统前缀，避免把 id 塞进用户原文。"""
     if not selection or not isinstance(selection, dict):
@@ -213,7 +195,6 @@ async def prepare_completion(
         raise ValidationAppError("slug and message required")
 
     app = app_service.get_app(tenant_id, slug)
-    adapter = _build_chat_adapter(app)
 
     sid = await ensure_session(
         session,
@@ -262,7 +243,6 @@ async def prepare_completion(
         "session_id": sid,
         "run_id": run_id,
         "app": app,
-        "adapter": adapter,
         "messages": messages,
         "request_id": request_id,
     }
@@ -271,19 +251,12 @@ async def prepare_completion(
 async def _drive_agent(
     session: AsyncSession, prepared: dict
 ) -> AsyncIterator[dict[str, Any]]:
-    """执行循环：产出 step / 最终结果字典（_final）。"""
+    """LangGraph 执行循环：产出 step / 最终结果字典（_final）。"""
     app = prepared["app"]
     async for ev in iter_agent_run(
-        slug=app["slug"],
-        workspace_path=app["workspace_path"],
-        agent_id=app["coordinator_agent_id"],
+        app=app,
         messages=prepared["messages"],
-        tools=app.get("allowed_tools") or [],
-        adapter=prepared["adapter"],
         max_steps=int(app.get("max_steps") or 8),
-        tenant_id=app["tenant_id"],
-        specialists=app.get("specialists") or [],
-        workspace_tools=app.get("all_tools") or [],
     ):
         if ev.get("_final"):
             yield ev
@@ -344,7 +317,9 @@ async def complete_non_stream(session: AsyncSession, prepared: dict) -> dict:
             "run_id": prepared["run_id"],
             "session_id": prepared["session_id"],
             "answer": answer,
-            "model": get_settings().llm_model,
+            "model": (
+                await model_service.load_runtime_model(app["tenant_id"], "chat")
+            )["model_name"],
             "usage": usage,
             "tool_trace": final.get("tool_trace") or [],
             "steps": steps,

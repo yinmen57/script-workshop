@@ -16,6 +16,7 @@
 | [06-admin-pages.md](./06-admin-pages.md) | React 管理端页面、路由、权限与交互规范 |
 | [07-p0-build-steps.md](./07-p0-build-steps.md) | P0 平台建立顺序、验收标准与范围边界 |
 | [08-agent-framework-pivot.md](./08-agent-framework-pivot.md) | **定位修订**：收敛为 Agent 开发框架，框架与业务层分层、改造顺序 |
+| [09-celery-rabbitmq-job-bus.md](./09-celery-rabbitmq-job-bus.md) | **作业总线**：Celery + RabbitMQ 全局唯一；统一投递/队列/Beat/替换步骤 |
 | [../business-script-material/README.md](../business-script-material/README.md) | 剧本工坊业务文档索引（非框架交付物） |
 | [../business-script-material/04-narrative-space-and-dual-mode.md](../business-script-material/04-narrative-space-and-dual-mode.md) | **目标产品形态**：四级模型 + 双模式 + 一致性规则 |
 | [../business-script-material/05-dev-roadmap.md](../business-script-material/05-dev-roadmap.md) | **后续开发路线**：已锁定决策与分阶段任务 |
@@ -31,6 +32,7 @@
 
 
 - **业务库**：MySQL 8+；缓存/限流：Redis  
+- **作业总线**：**Celery + RabbitMQ**（全局替换 Redis Stream；见 09）  
 - **企业能力**：多租户、RBAC、审计、配额、可观测为一等公民  
 
 ## 阅读顺序建议

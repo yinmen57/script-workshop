@@ -49,17 +49,13 @@ async def segment_and_sync(
         raise ValidationAppError("剧本未解析出任何集，无法语义切分")
 
     craft = await knowledge_context.assemble_segment_knowledge(tenant_id=tenant_id)
-    system_prompt = llm.load_prompt(
-        "agents/narrative-segmenter/prompts/system.md"
-    )
+    system_prompt = llm.load_prompt("narrative-segmenter/system.md")
     if craft:
         system_prompt += (
             "\n\n以下是已检索到的工艺规范（硬性约束，冲突时以之为准）：\n" + craft
         )
     system_prompt += "\n\n只输出 JSON，不要 markdown 说明。"
-    template = llm.load_prompt(
-        "agents/narrative-segmenter/prompts/segment-episode.md"
-    )
+    template = llm.load_prompt("narrative-segmenter/segment-episode.md")
 
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
 

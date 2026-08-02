@@ -1,9 +1,0 @@
-name: 剧本工坊
-description: 多 Agent 协作：协调 Agent 调度解析、物料、分镜与媒体生成能力。
-tenant_id: ten_demo
-coordinator: router
-max_steps: 16
-
-model:
-  primary: default
-  timeout_ms: 60000

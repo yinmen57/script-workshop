@@ -77,7 +77,7 @@ async def generate_material_prompts(
     style_bible = pack["style_bible"]
 
     craft = await knowledge_context.assemble_material_knowledge(tenant_id=tenant_id)
-    system_base = llm.load_prompt("agents/asset-planner/prompts/system.md")
+    system_base = llm.load_prompt("asset-planner/system.md")
     system_prompt = system_base
     if craft:
         system_prompt = (
@@ -118,8 +118,8 @@ async def generate_material_prompts(
         {"project_id": project_id, "tenant_id": tenant_id},
     )
 
-    char_tpl = llm.load_prompt("agents/asset-planner/prompts/material-character.md")
-    prop_tpl = llm.load_prompt("agents/asset-planner/prompts/material-prop.md")
+    char_tpl = llm.load_prompt("asset-planner/material-character.md")
+    prop_tpl = llm.load_prompt("asset-planner/material-prop.md")
     created: list[dict[str, Any]] = []
     skipped = 0
 

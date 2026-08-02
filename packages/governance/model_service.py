@@ -1,4 +1,4 @@
-"""模型配置服务。"""
+"""模型配置服务：密钥加密落库，运行时从此读取。"""
 
 from __future__ import annotations
 
@@ -14,25 +14,52 @@ from packages.adapters.llm_openai import OpenAICompatibleChatAdapter
 from packages.domain.errors import NotFoundError, ValidationAppError
 from packages.domain.ids import new_id
 from packages.infra.crypto import decrypt_secret, encrypt_secret
+from packages.infra.db import get_session_factory
+
+_MODEL_TYPES = frozenset({"chat", "embedding", "rerank", "image", "video"})
+_MEDIA_TYPES = frozenset({"image", "video"})
+_MEDIA_PROVIDERS = frozenset({"shangwu", "volcengine_ark"})
+_TYPE_LABEL = {
+    "chat": "Chat",
+    "embedding": "Embedding",
+    "rerank": "Rerank",
+    "image": "生图",
+    "video": "生视频",
+}
 
 
 def _validate_model_fields(
     *,
     model_type: str,
     dimension: int | None,
+    provider: str | None = None,
 ) -> None:
-    if model_type not in {"chat", "embedding", "rerank"}:
-        raise ValidationAppError("model_type must be chat/embedding/rerank")
+    if model_type not in _MODEL_TYPES:
+        raise ValidationAppError(
+            "model_type must be chat/embedding/rerank/image/video"
+        )
     if model_type == "embedding" and not dimension:
         raise ValidationAppError("embedding model requires dimension")
-    if model_type == "rerank" and dimension is not None:
-        raise ValidationAppError("rerank model must not set dimension")
+    if model_type in {"rerank", "image", "video"} and dimension is not None:
+        raise ValidationAppError(f"{model_type} model must not set dimension")
+    if model_type in _MEDIA_TYPES and provider is not None:
+        p = provider.strip()
+        if p and p not in _MEDIA_PROVIDERS:
+            raise ValidationAppError(
+                "image/video provider 须为 shangwu 或 volcengine_ark"
+            )
+
+
+def _parse_extra(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        return json.loads(raw) if raw else {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    return {}
 
 
 def _row_to_public(row: dict[str, Any]) -> dict[str, Any]:
-    extra = row.get("extra")
-    if isinstance(extra, str):
-        extra = json.loads(extra)
+    extra = _parse_extra(row.get("extra"))
     return {
         "id": row["id"],
         "tenant_id": row["tenant_id"],
@@ -42,7 +69,8 @@ def _row_to_public(row: dict[str, Any]) -> dict[str, Any]:
         "model_name": row["model_name"],
         "base_url": row["base_url"],
         "dimension": row["dimension"],
-        "extra": extra or {},
+        "extra": {k: v for k, v in extra.items() if k != "is_default"},
+        "is_default": bool(extra.get("is_default")),
         "status": row["status"],
         "has_api_key": bool(row.get("api_key_cipher")),
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
@@ -50,13 +78,82 @@ def _row_to_public(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_extra(payload: dict, current_extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    extra = dict(current_extra or {})
+    if "extra" in payload and isinstance(payload["extra"], dict):
+        extra.update(payload["extra"])
+    if "is_default" in payload:
+        extra["is_default"] = bool(payload["is_default"])
+    return extra
+
+
+async def _clear_other_defaults(
+    session: AsyncSession,
+    tenant_id: str,
+    model_type: str,
+    keep_id: str,
+) -> None:
+    """同类型仅保留一条运行时默认。"""
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT id, extra FROM model_config
+                WHERE tenant_id = :tenant_id
+                  AND model_type = :model_type
+                  AND id != :keep_id
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "model_type": model_type,
+                "keep_id": keep_id,
+            },
+        )
+    ).mappings().all()
+    for row in rows:
+        extra = _parse_extra(row["extra"])
+        if not extra.get("is_default"):
+            continue
+        extra["is_default"] = False
+        await session.execute(
+            text(
+                """
+                UPDATE model_config SET extra = CAST(:extra AS JSON)
+                WHERE id = :id AND tenant_id = :tenant_id
+                """
+            ),
+            {
+                "id": row["id"],
+                "tenant_id": tenant_id,
+                "extra": json.dumps(extra, ensure_ascii=False),
+            },
+        )
+
+
 async def create_model(session: AsyncSession, tenant_id: str, payload: dict) -> dict:
     model_type = payload["model_type"]
     dimension = payload.get("dimension")
-    _validate_model_fields(model_type=model_type, dimension=dimension)
+    if model_type in {"chat", "image", "video", "rerank"}:
+        dimension = None
+    default_provider = (
+        "shangwu" if model_type in _MEDIA_TYPES else "openai_compatible"
+    )
+    provider = payload.get("provider", default_provider)
+    _validate_model_fields(
+        model_type=model_type, dimension=dimension, provider=provider
+    )
 
     model_id = new_id("mdl")
     cipher = encrypt_secret(payload["api_key"]) if payload.get("api_key") else None
+    extra = _merge_extra(payload)
+    # 新建且未显式指定时：同类型尚无默认则自动成为默认
+    if "is_default" not in payload and "is_default" not in (payload.get("extra") or {}):
+        existing_default = await _find_default_raw(session, tenant_id, model_type)
+        extra["is_default"] = existing_default is None
+
+    if extra.get("is_default"):
+        await _clear_other_defaults(session, tenant_id, model_type, model_id)
     await session.execute(
         text(
             """
@@ -65,20 +162,20 @@ async def create_model(session: AsyncSession, tenant_id: str, payload: dict) -> 
                api_key_cipher, dimension, extra, status)
             VALUES
               (:id, :tenant_id, :name, :provider, :model_type, :model_name, :base_url,
-               :api_key_cipher, :dimension, :extra, :status)
+               :api_key_cipher, :dimension, CAST(:extra AS JSON), :status)
             """
         ),
         {
             "id": model_id,
             "tenant_id": tenant_id,
             "name": payload["name"],
-            "provider": payload.get("provider", "openai_compatible"),
+            "provider": provider,
             "model_type": model_type,
             "model_name": payload["model_name"],
             "base_url": payload.get("base_url"),
             "api_key_cipher": cipher,
             "dimension": dimension,
-            "extra": json.dumps(payload.get("extra") or {}, ensure_ascii=False),
+            "extra": json.dumps(extra, ensure_ascii=False),
             "status": payload.get("status", "enabled"),
         },
     )
@@ -162,11 +259,20 @@ async def update_model(
     current = await _get_raw(session, tenant_id, model_id)
     model_type = payload.get("model_type", current["model_type"])
     dimension = payload["dimension"] if "dimension" in payload else current["dimension"]
-    _validate_model_fields(model_type=model_type, dimension=dimension)
+    if model_type in {"chat", "image", "video", "rerank"}:
+        dimension = None
+    provider = payload.get("provider", current["provider"])
+    _validate_model_fields(
+        model_type=model_type, dimension=dimension, provider=provider
+    )
 
     cipher = current["api_key_cipher"]
     if payload.get("api_key"):
         cipher = encrypt_secret(payload["api_key"])
+
+    extra = _merge_extra(payload, _parse_extra(current.get("extra")))
+    if extra.get("is_default"):
+        await _clear_other_defaults(session, tenant_id, model_type, model_id)
 
     await session.execute(
         text(
@@ -179,7 +285,7 @@ async def update_model(
               base_url = :base_url,
               api_key_cipher = :api_key_cipher,
               dimension = :dimension,
-              extra = :extra,
+              extra = CAST(:extra AS JSON),
               status = :status
             WHERE id = :id AND tenant_id = :tenant_id
             """
@@ -188,22 +294,13 @@ async def update_model(
             "id": model_id,
             "tenant_id": tenant_id,
             "name": payload.get("name", current["name"]),
-            "provider": payload.get("provider", current["provider"]),
+            "provider": provider,
             "model_type": model_type,
             "model_name": payload.get("model_name", current["model_name"]),
             "base_url": payload.get("base_url", current["base_url"]),
             "api_key_cipher": cipher,
             "dimension": dimension,
-            "extra": json.dumps(
-                payload.get("extra")
-                if "extra" in payload
-                else (
-                    json.loads(current["extra"])
-                    if isinstance(current["extra"], str)
-                    else (current["extra"] or {})
-                ),
-                ensure_ascii=False,
-            ),
+            "extra": json.dumps(extra, ensure_ascii=False),
             "status": payload.get("status", current["status"]),
         },
     )
@@ -264,12 +361,41 @@ async def test_model(session: AsyncSession, tenant_id: str, model_id: str) -> di
                 raise ValidationAppError(
                     f"dimension mismatch: expected {row['dimension']}, got {detail.get('dimension')}"
                 )
+        elif row["model_type"] in _MEDIA_TYPES:
+            import httpx
+
+            provider = (row.get("provider") or "").strip() or "shangwu"
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                if provider == "volcengine_ark":
+                    # 方舟：探测 /models（OpenAI 兼容列表）
+                    resp = await client.get(
+                        base_url.rstrip("/") + "/models",
+                        headers=headers,
+                    )
+                else:
+                    # 赏舞：查余额验证 key
+                    resp = await client.get(
+                        base_url.rstrip("/") + "/api/account/balance",
+                        headers=headers,
+                    )
+                detail = {
+                    "ok": resp.status_code < 500,
+                    "status_code": resp.status_code,
+                    "kind": row["model_type"],
+                    "provider": provider,
+                    "model_name": row["model_name"],
+                }
+                if resp.status_code >= 400:
+                    detail["body"] = resp.text[:200]
         else:
-            # rerank：仅检查 base_url 可达性（P0）
+            # rerank：仅检查 base_url 可达性
             import httpx
 
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(base_url.rstrip("/") + "/models")
+                resp = await client.get(base_url.rstrip("/") + "/v1/models")
                 detail = {"ok": resp.status_code < 500, "status_code": resp.status_code}
         latency_ms = int((time.perf_counter() - started) * 1000)
         return {
@@ -305,3 +431,71 @@ async def _get_raw(session: AsyncSession, tenant_id: str, model_id: str) -> dict
     if row is None:
         raise NotFoundError("model not found")
     return dict(row)
+
+
+async def _find_default_raw(
+    session: AsyncSession, tenant_id: str, model_type: str
+) -> dict | None:
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT * FROM model_config
+                WHERE tenant_id = :tenant_id
+                  AND model_type = :model_type
+                  AND status = 'enabled'
+                ORDER BY updated_at DESC
+                """
+            ),
+            {"tenant_id": tenant_id, "model_type": model_type},
+        )
+    ).mappings().all()
+    for row in rows:
+        if _parse_extra(row.get("extra")).get("is_default"):
+            return dict(row)
+    return None
+
+
+async def resolve_runtime_model(
+    session: AsyncSession, tenant_id: str, model_type: str
+) -> dict[str, Any]:
+    """读取租户运行时默认模型（含解密后的 api_key）。"""
+    if model_type not in _MODEL_TYPES:
+        raise ValidationAppError(f"未知 model_type：{model_type}")
+    row = await _find_default_raw(session, tenant_id, model_type)
+    if row is None:
+        label = _TYPE_LABEL.get(model_type, model_type)
+        raise ValidationAppError(
+            f"未配置默认 {label}：请到「AI Key 配置」添加并设为默认"
+        )
+    if row["status"] != "enabled":
+        raise ValidationAppError(f"默认 {model_type} 模型已停用")
+    base_url = (row.get("base_url") or "").strip()
+    if not base_url:
+        raise ValidationAppError(f"默认 {model_type} 缺少 base_url")
+    api_key = (
+        decrypt_secret(row["api_key_cipher"]) if row.get("api_key_cipher") else ""
+    )
+    # chat / 生图 / 生视频需要 key；embedding/rerank 允许空（本地 Xinference）
+    if model_type in {"chat", "image", "video"} and not api_key.strip():
+        raise ValidationAppError(f"默认 {model_type} 缺少 API Key")
+    extra = _parse_extra(row.get("extra"))
+    return {
+        "id": row["id"],
+        "tenant_id": row["tenant_id"],
+        "name": row["name"],
+        "provider": row["provider"],
+        "model_type": row["model_type"],
+        "model_name": row["model_name"],
+        "base_url": base_url.rstrip("/"),
+        "api_key": api_key,
+        "dimension": row.get("dimension"),
+        "extra": extra,
+        "timeout_seconds": float(extra.get("timeout_seconds") or 60),
+    }
+
+
+async def load_runtime_model(tenant_id: str, model_type: str) -> dict[str, Any]:
+    """独立开会话读取运行时模型（供 adapter / agent 使用）。"""
+    async with get_session_factory()() as session:
+        return await resolve_runtime_model(session, tenant_id, model_type)

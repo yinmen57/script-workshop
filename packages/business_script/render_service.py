@@ -1,6 +1,7 @@
-"""生图 / 生视频：走赏舞薄客户端，产物落 OSS 与业务表。
+"""生图 / 生视频：提交与完结分离（无长轮询）。
 
-要求：物料提示词 / 成片提示词须已 confirmed；提交前做余额预检。
+submit：创建上游任务；finalize：下载 OSS 并写业务表。
+方舟 Seedream 为同步生图：submit 即拿到 URL，由调度直接 finalize。
 """
 
 from __future__ import annotations
@@ -16,7 +17,18 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.adapters.sd_client import get_sd_client
+from packages.adapters.media_client import (
+    client_provider,
+    default_video_duration,
+    default_video_ratio,
+    default_video_resolution,
+    extract_image_result_url,
+    extract_video_result_url,
+    get_image_client,
+    get_video_client,
+    image_size_for_target,
+    is_sync_image_provider,
+)
 from packages.business_script import material_image_service, project_service
 from packages.domain.errors import NotFoundError, ValidationAppError
 from packages.domain.ids import new_id
@@ -83,15 +95,6 @@ def _ext_from_url(url: str, default: str) -> str:
     return default
 
 
-def _image_size_for_target(target_type: str) -> str:
-    settings = get_settings()
-    if target_type == "character":
-        return settings.sd_character_size
-    if target_type == "prop":
-        return settings.sd_background_size
-    return settings.sd_background_size
-
-
 async def _require_material_prompt(
     session: AsyncSession, tenant_id: str, prompt_id: str
 ) -> dict[str, Any]:
@@ -130,27 +133,27 @@ async def _require_video_prompt(
     return dict(row)
 
 
-async def render_material_image(
+async def submit_material_image(
     session: AsyncSession,
     tenant_id: str,
     material_prompt_id: str,
 ) -> dict[str, Any]:
-    """为已确认物料提示词生图，登记 material_image。"""
+    """校验并创建上游生图任务；方舟同步生图直接返回结果载荷。"""
     prompt = await _require_material_prompt(session, tenant_id, material_prompt_id)
     if (prompt.get("record_status") or "ai") != "confirmed":
         raise ValidationAppError("请先确认物料提示词再生成图片")
     project_id = prompt["project_id"]
     await project_service.require_project(session, tenant_id, project_id)
 
-    settings = get_settings()
-    client = get_sd_client()
+    client = await get_image_client(tenant_id)
+    provider = client_provider(client)
     preflight = await client.preflight()
-    size = _image_size_for_target(prompt["target_type"])
+    size = image_size_for_target(prompt["target_type"])
     gen_cfg = {
-        "image_model": settings.sd_image_model,
+        "image_model": client.model_name,
         "size": size,
-        "resolution": settings.sd_resolution_norm,
         "preflight_credits": preflight.get("credits"),
+        "provider": provider,
     }
 
     created = await client.create_image_task(
@@ -160,19 +163,53 @@ async def render_material_image(
     )
     task_id = str(created.get("id") or created.get("task_id") or "")
     if not task_id:
-        raise ValidationAppError(f"赏舞生图未返回 task id: {created}")
+        raise ValidationAppError(f"生图未返回 task id: {created}")
 
-    done = await client.poll_task(
-        task_id,
-        interval_sec=float(settings.sd_poll_interval_seconds),
-        timeout_sec=float(settings.sd_poll_timeout_seconds),
-    )
-    urls = done.get("result_image_urls") or done.get("image_urls") or []
-    if isinstance(urls, str):
-        urls = [urls]
-    if not urls:
-        raise ValidationAppError("赏舞生图成功但无结果 URL")
-    src_url = urls[0]
+    ready = is_sync_image_provider(provider) or bool(created.get("sync"))
+    result_payload = created if ready else None
+    if ready and not extract_image_result_url(created, provider=provider):
+        raise ValidationAppError(f"同步生图未返回图片 URL: {created}")
+
+    return {
+        "provider_task_id": task_id,
+        "project_id": project_id,
+        "material_prompt_id": material_prompt_id,
+        "gen_cfg": gen_cfg,
+        "preflight": preflight,
+        "prompt": prompt,
+        "provider": provider,
+        "ready_for_finalize": ready,
+        "result_payload": result_payload,
+    }
+
+
+async def finalize_material_image(
+    session: AsyncSession,
+    tenant_id: str,
+    *,
+    material_prompt_id: str,
+    provider_task_id: str,
+    result_payload: dict[str, Any] | None = None,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """上游已成功：下载并登记 material_image。"""
+    prompt = await _require_material_prompt(session, tenant_id, material_prompt_id)
+    project_id = prompt["project_id"]
+
+    payload = result_payload
+    resolved_provider = provider
+    if payload is None:
+        client = await get_image_client(tenant_id)
+        resolved_provider = client_provider(client)
+        payload = await client.get_task(provider_task_id)
+    elif not resolved_provider:
+        client = await get_image_client(tenant_id)
+        resolved_provider = client_provider(client)
+
+    src_url = extract_image_result_url(payload, provider=resolved_provider)
+    if not src_url:
+        raise ValidationAppError("生图成功但无结果 URL")
+
     data, ctype = await _download_bytes(src_url)
     ext = _ext_from_url(src_url, "png")
     filename = f"{uuid4().hex}.{ext}"
@@ -197,8 +234,8 @@ async def render_material_image(
             "source_id": prompt["target_id"],
             "prompt": prompt["prompt_text"],
             "generation_config": {
-                **gen_cfg,
-                "provider_task_id": task_id,
+                "provider": resolved_provider,
+                "provider_task_id": provider_task_id,
                 "provider_url": src_url,
                 "material_prompt_id": material_prompt_id,
             },
@@ -206,9 +243,10 @@ async def render_material_image(
     )
     return {
         "image": image,
-        "provider_task_id": task_id,
-        "preflight": preflight,
+        "provider_task_id": provider_task_id,
         "material_prompt_id": material_prompt_id,
+        "oss_uri": oss_uri,
+        "result_url": src_url,
     }
 
 
@@ -255,12 +293,12 @@ async def list_video_jobs(
     return {"items": items, "total": len(items)}
 
 
-async def render_video(
+async def submit_video(
     session: AsyncSession,
     tenant_id: str,
     video_prompt_id: str,
 ) -> dict[str, Any]:
-    """为已确认成片提示词生成一段视频片段成片，写入 video_job。"""
+    """校验、落 video_job，并创建上游生视频任务。"""
     vp = await _require_video_prompt(session, tenant_id, video_prompt_id)
     if (vp.get("record_status") or "ai") != "confirmed":
         raise ValidationAppError("请先确认成片提示词再生成视频")
@@ -269,8 +307,8 @@ async def render_video(
     segment_id = vp["video_segment_id"]
     await project_service.require_project(session, tenant_id, project_id)
 
-    settings = get_settings()
-    client = get_sd_client()
+    client = await get_video_client(tenant_id)
+    provider = client_provider(client)
     preflight = await client.preflight()
 
     content: list[dict[str, Any]] = [
@@ -305,25 +343,25 @@ async def render_video(
                 }
             )
 
-    # 业务 duration：优先提示词；否则配置；并封顶 15
     duration = vp.get("duration_sec")
     if duration is not None:
         try:
             duration_i = int(round(float(duration)))
         except (TypeError, ValueError):
-            duration_i = settings.sd_video_duration
+            duration_i = default_video_duration(provider=provider)
     else:
-        duration_i = settings.sd_video_duration
+        duration_i = default_video_duration(provider=provider)
     if duration_i > 15:
         duration_i = 15
 
     gen_cfg = {
-        "video_model": settings.sd_video_model,
+        "video_model": client.model_name,
         "duration": duration_i,
-        "resolution": settings.sd_video_resolution,
-        "ratio": settings.sd_video_ratio,
+        "resolution": default_video_resolution(provider=provider),
+        "ratio": default_video_ratio(provider=provider),
         "preflight_credits": preflight.get("credits"),
         "ref_image_count": max(0, len(content) - 1),
+        "provider": provider,
     }
 
     job_id = new_id("svj")
@@ -356,10 +394,12 @@ async def render_video(
         created = await client.create_video_task(
             content=content,
             duration=duration_i,
+            resolution=default_video_resolution(provider=provider),
+            ratio=default_video_ratio(provider=provider),
         )
         provider_id = str(created.get("id") or created.get("task_id") or "")
         if not provider_id:
-            raise ValidationAppError(f"赏舞生视频未返回 task id: {created}")
+            raise ValidationAppError(f"生视频未返回 task id: {created}")
         await session.execute(
             text(
                 """
@@ -369,47 +409,6 @@ async def render_video(
                 """
             ),
             {"id": job_id, "pid": provider_id},
-        )
-        await session.commit()
-
-        done = await client.poll_task(
-            provider_id,
-            interval_sec=float(settings.sd_video_poll_interval_seconds),
-            timeout_sec=float(settings.sd_video_poll_timeout_seconds),
-        )
-        result_url = (
-            done.get("stored_video_url")
-            or done.get("video_url")
-            or (done.get("result") or {}).get("video_url")
-        )
-        if not result_url:
-            raise ValidationAppError("赏舞生视频成功但无结果 URL")
-
-        data, ctype = await _download_bytes(str(result_url))
-        ext = _ext_from_url(str(result_url), "mp4")
-        filename = f"{uuid4().hex}.{ext}"
-        oss_uri = _store_generated(
-            tenant_id=tenant_id,
-            project_id=project_id,
-            kind="video",
-            filename=filename,
-            data=data,
-            content_type=ctype or "video/mp4",
-        )
-        await session.execute(
-            text(
-                """
-                UPDATE video_job
-                SET status = 'succeeded', oss_uri = :oss_uri, result_url = :result_url,
-                    finished_at = CURRENT_TIMESTAMP(3), error = NULL
-                WHERE id = :id
-                """
-            ),
-            {
-                "id": job_id,
-                "oss_uri": oss_uri,
-                "result_url": str(result_url),
-            },
         )
         await session.commit()
     except Exception as exc:  # noqa: BLE001 — 落 failed 状态
@@ -428,14 +427,112 @@ async def render_video(
         await session.commit()
         raise
 
+    return {
+        "provider_task_id": provider_id,
+        "video_job_id": job_id,
+        "project_id": project_id,
+        "video_prompt_id": video_prompt_id,
+        "gen_cfg": gen_cfg,
+        "preflight": preflight,
+        "provider": provider,
+        "ready_for_finalize": False,
+    }
+
+
+async def finalize_video(
+    session: AsyncSession,
+    tenant_id: str,
+    *,
+    video_job_id: str,
+    provider_task_id: str,
+    result_payload: dict[str, Any] | None = None,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """上游已成功：下载视频并更新 video_job。"""
     row = (
         await session.execute(
+            text(
+                """
+                SELECT * FROM video_job
+                WHERE id = :id AND tenant_id = :tenant_id
+                """
+            ),
+            {"id": video_job_id, "tenant_id": tenant_id},
+        )
+    ).mappings().first()
+    if row is None:
+        raise NotFoundError("video_job not found")
+    job = dict(row)
+    project_id = job["project_id"]
+
+    payload = result_payload
+    resolved_provider = provider
+    if payload is None:
+        client = await get_video_client(tenant_id)
+        resolved_provider = client_provider(client)
+        payload = await client.get_task(provider_task_id)
+    elif not resolved_provider:
+        client = await get_video_client(tenant_id)
+        resolved_provider = client_provider(client)
+
+    result_url = extract_video_result_url(payload, provider=resolved_provider)
+    if not result_url:
+        raise ValidationAppError("生视频成功但无结果 URL")
+
+    data, ctype = await _download_bytes(str(result_url))
+    ext = _ext_from_url(str(result_url), "mp4")
+    filename = f"{uuid4().hex}.{ext}"
+    oss_uri = _store_generated(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        kind="video",
+        filename=filename,
+        data=data,
+        content_type=ctype or "video/mp4",
+    )
+    await session.execute(
+        text(
+            """
+            UPDATE video_job
+            SET status = 'succeeded', oss_uri = :oss_uri, result_url = :result_url,
+                finished_at = CURRENT_TIMESTAMP(3), error = NULL
+            WHERE id = :id
+            """
+        ),
+        {
+            "id": video_job_id,
+            "oss_uri": oss_uri,
+            "result_url": str(result_url),
+        },
+    )
+    await session.commit()
+
+    row2 = (
+        await session.execute(
             text("SELECT * FROM video_job WHERE id = :id"),
-            {"id": job_id},
+            {"id": video_job_id},
         )
     ).mappings().first()
     return {
-        "video_job": _video_job_public(dict(row)),
-        "preflight": preflight,
-        "video_prompt_id": video_prompt_id,
+        "video_job": _video_job_public(dict(row2)),
+        "video_prompt_id": job["video_prompt_id"],
+        "oss_uri": oss_uri,
+        "result_url": str(result_url),
     }
+
+
+async def mark_video_job_failed(
+    session: AsyncSession, video_job_id: str, error: str
+) -> None:
+    await session.execute(
+        text(
+            """
+            UPDATE video_job
+            SET status = 'failed', error = :error,
+                finished_at = CURRENT_TIMESTAMP(3)
+            WHERE id = :id AND status IN ('queued', 'processing')
+            """
+        ),
+        {"id": video_job_id, "error": (error or "")[:4000]},
+    )
+    await session.commit()

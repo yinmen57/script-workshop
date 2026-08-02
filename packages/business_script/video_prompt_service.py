@@ -248,7 +248,7 @@ async def generate_for_segment(
     )
 
     craft = await knowledge_context.assemble_video_knowledge(tenant_id=tenant_id)
-    system_prompt = llm.load_prompt("agents/shot-planner/prompts/system.md")
+    system_prompt = llm.load_prompt("shot-planner/system.md")
     if craft:
         system_prompt = (
             system_prompt
@@ -260,7 +260,7 @@ async def generate_for_segment(
         + "\n\n只输出 JSON，不要 markdown 说明。"
     )
 
-    template = llm.load_prompt("agents/shot-planner/prompts/video-prompt.md")
+    template = llm.load_prompt("shot-planner/video-prompt.md")
     user_prompt = llm.render_prompt(
         template,
         style_bible=style_bible,

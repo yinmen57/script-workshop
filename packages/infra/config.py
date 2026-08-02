@@ -61,59 +61,38 @@ class Settings(BaseSettings):
     oss_sts_endpoint: str = "sts.cn-hangzhou.aliyuncs.com"
     oss_sts_duration_seconds: int = 900
 
-    queue_backend: str = "redis_stream"
-    queue_stream_key: str = "ai_platform:ingest"
-    # 剧本业务作业 Stream（第三段 Worker 消费）
-    script_job_stream_key: str = "ai_platform:script_jobs"
-    script_job_group: str = "script-workers"
-    script_job_consumer_prefix: str = "worker"
+    # 阿里云短信（验证码登录等）
+    sms_enabled: bool = False
+    sms_access_key_id: str = ""
+    sms_access_key_secret: str = ""
+    sms_sign_name: str = ""
+    sms_login_template_code: str = ""
+    sms_endpoint: str = "dysmsapi.aliyuncs.com"
+    sms_code_expire_seconds: int = 300
+    sms_resend_seconds: int = 60
+    sms_max_attempts: int = 5
 
-    xinference_base_url: str = "http://127.0.0.1:9997"
-    xinference_embedding_model_uid: str = "bge-m3"
-    xinference_rerank_model_uid: str = "bge-reranker-v2-m3"
+    # 作业总线：Celery + RabbitMQ
+    celery_broker_url: str = Field(
+        ...,
+        min_length=1,
+        description="如 amqp://guest:guest@127.0.0.1:5672//",
+    )
+    celery_result_backend: str = ""
+    celery_task_default_queue: str = "sync"
+    celery_task_acks_late: bool = True
+    celery_worker_prefetch_multiplier: int = 1
+    # 生成槽位（Beat）
+    gen_max_inflight_per_tenant: int = 3
+    gen_submit_batch: int = 20
+    gen_poll_batch: int = 50
 
-    # 默认 Chat LLM（火山方舟 OpenAI 兼容）；app.yaml model.primary=default 时直读
-    llm_base_url: str = Field(..., min_length=1)
-    llm_model: str = Field(..., min_length=1)
-    llm_api_key: str = Field(..., min_length=1)
-    llm_timeout: int = 60
-    # 多 Agent 应用总空间：一级目录对应一个应用空间
-    agent_workspace_root: str = "apps-space"
-
-    # 赏舞（sd-2-c）开放 API：生图 / 生视频
-    sd_enabled: bool = False
-    sd_base_url: str = ""
-    sd_api_key: str = ""
-    sd_image_model: str = "doubao-seedream-5-0-260128"
-    sd_video_model: str = "doubao-seedance-2-0-260128"
-    sd_resolution: str = "2K"
-    sd_character_size: str = "3:4"
-    sd_three_view_size: str = "16:9"
-    sd_character_view_size: str = "21:9"
-    sd_background_size: str = "16:9"
-    sd_request_timeout_seconds: int = 60
-    sd_poll_interval_seconds: int = 3
-    sd_poll_timeout_seconds: int = 300
-    sd_video_duration: int = -1
-    sd_video_resolution: str = "480p"
-    sd_video_ratio: str = "adaptive"
-    sd_video_poll_interval_seconds: int = 5
-    sd_video_poll_timeout_seconds: int = 600
-    sd_portrait_poll_interval_seconds: int = 5
-    sd_portrait_poll_timeout_seconds: int = 300
-    sd_portrait_wait_on_submit: bool = True
-
-    @field_validator("oss_endpoint", "oss_sts_endpoint", "oss_public_base_url", "sd_base_url", mode="before")
+    @field_validator("oss_endpoint", "oss_sts_endpoint", "oss_public_base_url", mode="before")
     @classmethod
     def strip_str(cls, v: object) -> object:
         if isinstance(v, str):
             return v.strip()
         return v
-
-    @property
-    def sd_resolution_norm(self) -> str:
-        """生图分辨率规范为小写（2k / 3k）。"""
-        return (self.sd_resolution or "2k").strip().lower()
 
     @property
     def oss_endpoint_url(self) -> str:

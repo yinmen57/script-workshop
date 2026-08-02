@@ -70,7 +70,7 @@ async def parse_project(
         await session.commit()
 
         craft = await knowledge_context.assemble_parse_knowledge(tenant_id=tenant_id)
-        system_prompt = llm.load_prompt("agents/parser/prompts/system.md")
+        system_prompt = llm.load_prompt("parser/system.md")
         if craft:
             system_prompt = (
                 system_prompt
@@ -83,7 +83,7 @@ async def parse_project(
             "不要输出 scenes：集与叙事空间已由规则解析完成。"
         )
 
-        template = llm.load_prompt("agents/parser/prompts/parse-script.md")
+        template = llm.load_prompt("parser/parse-script.md")
         # 超长剧本只把 preamble + 各集摘要与现身角色送给资产抽取，控制 token
         asset_text = _asset_extract_text(doc["raw_text"], structure_bundle)
         user_prompt = llm.render_prompt(template, script_text=asset_text)

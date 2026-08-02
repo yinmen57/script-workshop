@@ -53,3 +53,12 @@ async def ping_mysql() -> bool:
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     return True
+
+
+async def dispose_engine() -> None:
+    """释放引擎；Celery 每次 asyncio.run 换 loop 时必须调用。"""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None

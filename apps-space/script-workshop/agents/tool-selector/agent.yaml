@@ -1,7 +1,0 @@
-name: 工具选择 Agent
-role: specialist
-description: 只读巡检项目状态，判断下一步该调用哪个工具或专业 Agent，不直接执行写操作。
-system_prompt: prompts/system.md
-max_steps: 4
-tools:
-  - inspect

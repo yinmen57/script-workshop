@@ -1,5 +1,6 @@
 import {
   AppstoreOutlined,
+  KeyOutlined,
   LogoutOutlined,
   PartitionOutlined,
 } from "@ant-design/icons";
@@ -9,23 +10,29 @@ import { useAuthStore } from "../stores/auth";
 
 const { Header, Sider, Content } = Layout;
 
-const menuItems = [
-  { key: "/apps", icon: <AppstoreOutlined />, label: "应用空间" },
-  { key: "/script-workspace", icon: <PartitionOutlined />, label: "剧本工作台" },
-];
-
 export function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const displayName = useAuthStore((s) => s.displayName);
   const tenantId = useAuthStore((s) => s.tenantId);
   const logout = useAuthStore((s) => s.logout);
+  const hasPermission = useAuthStore((s) => s.hasPermission);
+
+  const menuItems = [
+    { key: "/apps", icon: <AppstoreOutlined />, label: "应用空间" },
+    { key: "/script-workspace", icon: <PartitionOutlined />, label: "剧本工作台" },
+    ...(hasPermission("model:read")
+      ? [{ key: "/models", icon: <KeyOutlined />, label: "AI Key 配置" }]
+      : []),
+  ];
 
   const selectedKey = location.pathname.startsWith("/apps")
     ? "/apps"
     : location.pathname.startsWith("/script-workspace")
       ? "/script-workspace"
-      : location.pathname;
+      : location.pathname.startsWith("/models")
+        ? "/models"
+        : location.pathname;
 
   return (
     <Layout style={{ minHeight: "100vh" }}>

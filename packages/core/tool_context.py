@@ -1,4 +1,4 @@
-"""工具调用上下文：由 agent_runtime 注入，供 apps-space 工具读取租户。"""
+"""工具调用上下文：由 LangGraph 运行时注入，供业务工具读取租户。"""
 
 from __future__ import annotations
 

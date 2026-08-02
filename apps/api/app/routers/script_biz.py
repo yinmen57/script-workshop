@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, File, Form, UploadFile
 
 from app.deps import AuthDep, DbSession, RequestIdDep
-from packages.adapters.sd_client import get_sd_client
+from packages.adapters.media_client import get_image_client, get_video_client
 from packages.business_script import (
     canvas_service,
     ingest,
@@ -1071,10 +1071,13 @@ async def confirm_material_prompt(
 
 
 @router.get("/sd/balance")
-async def sd_balance(auth: AuthDep) -> dict:
-    """赏舞余额预检（连通性）。"""
+async def sd_balance(auth: AuthDep, kind: str = "image") -> dict:
+    """生图/生视频预检；按默认 AI Key 的 provider 分流（赏舞查余额，方舟仅校验配置）。"""
     auth.require(APP_READ)
-    client = get_sd_client()
+    if kind == "video":
+        client = await get_video_client(auth.tenant_id)
+    else:
+        client = await get_image_client(auth.tenant_id)
     return await client.preflight()
 
 

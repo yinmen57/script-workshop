@@ -40,7 +40,7 @@ export function AgentWorkspacePage() {
       <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="目录">{data.workspace_path}</Descriptions.Item>
         <Descriptions.Item label="协作模式">
-          <Tag color="blue">多 Agent / ReAct</Tag>
+          <Tag color="blue">{data.collaboration_mode || "langgraph_multi_agent"}</Tag>
         </Descriptions.Item>
         <Descriptions.Item label="协调 Agent">{data.coordinator_agent_id}</Descriptions.Item>
         <Descriptions.Item label="加载状态">
@@ -198,7 +198,7 @@ export function AgentWorkspacePage() {
               render: (v: string) => <Tag>{v}</Tag>,
             },
             { title: "代码入口", dataIndex: "entrypoint" },
-            { title: "声明文件", dataIndex: "source_path" },
+            { title: "定义位置", dataIndex: "source_path" },
           ]}
         />
       </Card>

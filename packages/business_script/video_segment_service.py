@@ -345,15 +345,13 @@ def _shot_duration(shot: dict[str, Any]) -> float:
 async def _load_prompts(tenant_id: str) -> tuple[str, str]:
     """编组用的 system / user 模板，附带检索到的镜头组工艺规范。"""
     craft = await knowledge_context.assemble_video_knowledge(tenant_id=tenant_id)
-    system_prompt = llm.load_prompt("agents/shot-planner/prompts/system.md")
+    system_prompt = llm.load_prompt("shot-planner/system.md")
     if craft:
         system_prompt += (
             "\n\n以下是已检索到的工艺规范（硬性约束，冲突时以之为准）：\n" + craft
         )
     system_prompt += "\n\n只输出 JSON，不要 markdown 说明。"
-    template = llm.load_prompt(
-        "agents/shot-planner/prompts/group-video-segments.md"
-    )
+    template = llm.load_prompt("shot-planner/group-video-segments.md")
     return system_prompt, template
 
 

@@ -240,6 +240,9 @@ async def find_active(
     return _job_public(dict(row)) if row else None
 
 
+RENDER_KINDS = frozenset({KIND_RENDER_IMAGE, KIND_RENDER_VIDEO})
+
+
 async def submit_job(
     session: AsyncSession,
     *,
@@ -252,7 +255,7 @@ async def submit_job(
     created_by: str | None = None,
     enqueue: bool = True,
 ) -> dict:
-    """创建作业并投递到 Redis Stream；若已有活动作业则直接返回。"""
+    """创建作业并投递 Celery；生成类另写 generation_task，由 Beat 调度。"""
     await project_service.require_project(session, tenant_id, project_id)
     active = await find_active(
         session,
@@ -264,6 +267,10 @@ async def submit_job(
         return {**active, "deduped": True}
 
     job_id = new_id("sjob")
+    payload = payload or {}
+    if kind in RENDER_KINDS:
+        _validate_render_payload(kind, payload)
+
     await session.execute(
         text(
             """
@@ -282,25 +289,86 @@ async def submit_job(
             "kind": kind,
             "dedupe_key": dedupe_key,
             "label": label[:255],
-            "payload": json.dumps(payload or {}, ensure_ascii=False),
+            "payload": json.dumps(payload, ensure_ascii=False),
             "created_by": created_by,
         },
     )
     await session.commit()
+
+    if kind in RENDER_KINDS:
+        try:
+            await _create_generation_for_job(
+                session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                job_run_id=job_id,
+                kind=kind,
+                payload=payload,
+            )
+        except Exception as exc:  # noqa: BLE001 — 创建失败则同步失败 job_run
+            msg = getattr(exc, "message", None) or str(exc)
+            await mark_failed(session, job_id, msg)
+            raise
+
     job = await get_job(session, tenant_id, job_id)
 
-    if enqueue:
-        from packages.infra.queue_stream import enqueue_script_job
+    if enqueue and kind not in RENDER_KINDS:
+        from packages.infra.jobs import enqueue_sync_job
 
-        await enqueue_script_job(
-            {
-                "job_id": job_id,
-                "tenant_id": tenant_id,
-                "project_id": project_id,
-                "kind": kind,
-            }
-        )
+        enqueue_sync_job(job_id)
     return {**job, "deduped": False}
+
+
+def _validate_render_payload(kind: str, payload: dict[str, Any]) -> None:
+    if kind == KIND_RENDER_IMAGE:
+        if not payload.get("material_prompt_id"):
+            raise ValidationAppError("缺少 material_prompt_id")
+    elif kind == KIND_RENDER_VIDEO:
+        if not payload.get("video_prompt_id"):
+            raise ValidationAppError("缺少 video_prompt_id")
+
+
+async def _create_generation_for_job(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    project_id: str,
+    job_run_id: str,
+    kind: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    from packages.business_script import generation_service
+    from packages.governance.model_service import load_runtime_model
+
+    if kind == KIND_RENDER_IMAGE:
+        model_type = "image"
+        gen_kind = "image"
+        biz_ref_type = "material_prompt"
+        biz_ref_id = str(payload["material_prompt_id"])
+    else:
+        model_type = "video"
+        gen_kind = "video"
+        biz_ref_type = "video_prompt"
+        biz_ref_id = str(payload["video_prompt_id"])
+
+    from packages.adapters.media_client import require_media_provider
+
+    creds = await load_runtime_model(tenant_id, model_type)
+    provider = require_media_provider(
+        creds.get("provider") or "",
+        kind="生图" if gen_kind == "image" else "生视频",
+    )
+    return await generation_service.create_generation_task(
+        session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        job_run_id=job_run_id,
+        kind=gen_kind,
+        provider=provider,
+        model_name=creds.get("model_name") or "",
+        biz_ref_type=biz_ref_type,
+        biz_ref_id=biz_ref_id,
+    )
 
 
 async def mark_running(session: AsyncSession, job_id: str) -> dict | None:
@@ -442,6 +510,21 @@ async def request_cancel(
                 """
             ),
             {"id": job_id},
+        )
+        # 同步取消尚未提交上游的 generation_task
+        await session.execute(
+            text(
+                """
+                UPDATE generation_task
+                SET status = 'cancelled',
+                    error = 'cancelled',
+                    finished_at = CURRENT_TIMESTAMP(3),
+                    claim_owner = NULL,
+                    claim_until = NULL
+                WHERE job_run_id = :job_id AND status = 'pending'
+                """
+            ),
+            {"job_id": job_id},
         )
     await session.commit()
     return await get_job(session, tenant_id, job_id)

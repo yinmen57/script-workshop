@@ -36,6 +36,25 @@ services:
       timeout: 3s
       retries: 10
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: ai-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    environment:
+      # guest 仅本机可用；容器间通信必须用自定义用户
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ai}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ai_platform}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   qdrant:
     image: qdrant/qdrant:v1.13.2
     container_name: ai-qdrant
@@ -64,27 +83,24 @@ services:
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      # 容器内走服务名与内部端口
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       REDIS_HOST: redis
       REDIS_PORT: 6379
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
-      # 宿主机上的 Xinference（Windows/Mac Docker Desktop 可用）
-      XINFERENCE_BASE_URL: ${XINFERENCE_BASE_URL_DOCKER:-http://host.docker.internal:9997}
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
     ports:
       - "${APP_PORT:-42867}:8000"
     volumes:
-      # 本地开发时让管理端重新加载宿主机中的 Agent 应用空间
-      - ./apps-space:/app/apps-space:ro
       - ./packages:/app/packages:ro
-      - ./apps/worker:/app/apps/worker:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       qdrant:
         condition: service_healthy
@@ -96,14 +112,27 @@ services:
       timeout: 5s
       retries: 12
 
-  # 剧本业务作业 Worker（与 api 同镜像）
-  worker:
+  celery-worker-sync:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    container_name: ai-worker
+    container_name: ai-celery-sync
     restart: unless-stopped
-    command: ["python", "-m", "apps.worker"]
+    command:
+      [
+        "celery",
+        "-A",
+        "packages.infra.celery_app.celery_app",
+        "worker",
+        "-Q",
+        "sync",
+        "-c",
+        "2",
+        "-l",
+        "INFO",
+        "-n",
+        "sync@%h",
+      ]
     env_file:
       - .env
     environment:
@@ -113,20 +142,102 @@ services:
       REDIS_PORT: 6379
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
-      XINFERENCE_BASE_URL: ${XINFERENCE_BASE_URL_DOCKER:-http://host.docker.internal:9997}
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
     volumes:
-      - ./apps-space:/app/apps-space:ro
       - ./packages:/app/packages:ro
-      - ./apps/worker:/app/apps/worker:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       redis:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-      api:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      disable: true
+
+  celery-worker-gen:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ai-celery-gen
+    restart: unless-stopped
+    command:
+      [
+        "celery",
+        "-A",
+        "packages.infra.celery_app.celery_app",
+        "worker",
+        "-Q",
+        "gen.submit,gen.finalize",
+        "-c",
+        "2",
+        "-l",
+        "INFO",
+        "-n",
+        "gen@%h",
+      ]
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
+    volumes:
+      - ./packages:/app/packages:ro
+      - ./alembic:/app/alembic:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      disable: true
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ai-celery-beat
+    restart: unless-stopped
+    command:
+      [
+        "celery",
+        "-A",
+        "packages.infra.celery_app.celery_app",
+        "beat",
+        "-l",
+        "INFO",
+      ]
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
+    volumes:
+      - ./packages:/app/packages:ro
+      - ./alembic:/app/alembic:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -136,4 +247,5 @@ services:
 volumes:
   mysql_data:
   redis_data:
+  rabbitmq_data:
   qdrant_data:

@@ -1,4 +1,4 @@
-"""剧本业务用的 Chat 调用与 JSON 解析。"""
+"""剧本业务用的 Chat 调用与 JSON 解析。凭证来自 AI Key 配置页。"""
 
 from __future__ import annotations
 
@@ -8,17 +8,24 @@ from pathlib import Path
 from typing import Any
 
 from packages.adapters.llm_openai import OpenAICompatibleChatAdapter
+from packages.core.tool_context import require_tenant_id
 from packages.domain.errors import ValidationAppError
-from packages.infra.config import get_settings
+from packages.governance.model_service import load_runtime_model
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_WORKSHOP = _REPO_ROOT / "apps-space" / "script-workshop"
+# 统一走 agent_apps 包内 prompts/
+_PROMPTS_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "agent_apps"
+    / "script_workshop"
+    / "prompts"
+)
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
 def load_prompt(relative_path: str) -> str:
-    path = _WORKSHOP / relative_path
+    """relative_path 形如 parser/system.md、shot-planner/plan-shots.md。"""
+    path = _PROMPTS_ROOT / relative_path
     if not path.is_file():
         raise ValidationAppError(f"提示词文件不存在：{relative_path}")
     return path.read_text(encoding="utf-8")
@@ -36,13 +43,14 @@ def render_prompt(template: str, **kwargs: Any) -> str:
     return text
 
 
-def chat_adapter() -> OpenAICompatibleChatAdapter:
-    settings = get_settings()
+async def chat_adapter() -> OpenAICompatibleChatAdapter:
+    tenant_id = require_tenant_id()
+    creds = await load_runtime_model(tenant_id, "chat")
     return OpenAICompatibleChatAdapter(
-        settings.llm_base_url,
-        settings.llm_api_key,
-        settings.llm_model,
-        timeout_ms=int(settings.llm_timeout * 1000),
+        creds["base_url"],
+        creds["api_key"],
+        creds["model_name"],
+        timeout_ms=int(creds["timeout_seconds"] * 1000),
     )
 
 
@@ -70,5 +78,6 @@ def extract_json_object(content: str) -> dict[str, Any]:
 
 
 async def chat_json(messages: list[dict[str, Any]]) -> dict[str, Any]:
-    result = await chat_adapter().chat(messages)
+    adapter = await chat_adapter()
+    result = await adapter.chat(messages)
     return extract_json_object(result.get("content") or "")

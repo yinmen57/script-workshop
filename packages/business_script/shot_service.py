@@ -202,7 +202,7 @@ async def plan_shots_for_space(
     )
 
     craft = await knowledge_context.assemble_shot_knowledge(tenant_id=tenant_id)
-    system_prompt = llm.load_prompt("agents/shot-planner/prompts/system.md")
+    system_prompt = llm.load_prompt("shot-planner/system.md")
     if craft:
         system_prompt = (
             system_prompt
@@ -215,7 +215,7 @@ async def plan_shots_for_space(
         + "\n\n只输出 JSON，不要 markdown 说明。"
     )
 
-    template = llm.load_prompt("agents/shot-planner/prompts/plan-shots.md")
+    template = llm.load_prompt("shot-planner/plan-shots.md")
     scene_payload = {
         "id": space["id"],
         "title": space.get("title") or "",

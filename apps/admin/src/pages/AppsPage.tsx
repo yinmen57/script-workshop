@@ -55,8 +55,7 @@ export function AppsPage() {
     <div>
       <Typography.Title level={3}>应用空间</Typography.Title>
       <Typography.Paragraph type="secondary">
-        编辑 apps-space 下的文件即可定义应用；保存后刷新本页生效（按目录 mtime 热重载）。每个空间对应
-        一个调试台。
+        每个应用是 packages/agent_apps 下的一个包（Agent / Prompt / 工具 / 知识库）。每个空间对应一个调试台。
       </Typography.Paragraph>
       <Table rowKey="slug" loading={isLoading} columns={columns} dataSource={data?.items || []} />
     </div>

@@ -55,7 +55,7 @@
 | Redis | 会话缓存、限流计数、短期 Memory 可选 |
 | **Qdrant** | 向量存储（独立部署；HTTP/gRPC） |
 | 对象存储（OSS/S3/本地） | 原始文档 |
-| 消息队列（Redis Stream / RabbitMQ / Kafka 之一） | 文档解析与向量化异步任务 |
+| **Celery + RabbitMQ**（作业总线唯一） | 全部异步作业：剧本 job、生图/生视频、Beat 调度；见 [09-celery-rabbitmq-job-bus.md](./09-celery-rabbitmq-job-bus.md)。Redis Stream 作业路径废弃 |
 
 ## 5. 本地推理与检索模型（已确认）
 

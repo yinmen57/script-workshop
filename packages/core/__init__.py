@@ -1,1 +1,1 @@
-# 核心编排：Agent 运行时
+# 核心包：工具上下文等（Agent 运行时见 packages.agent_apps）

@@ -13,7 +13,6 @@ from packages.adapters.embedding_openai import OpenAICompatibleEmbeddingAdapter
 from packages.adapters.rerank_xinference import XinferenceRerankAdapter
 from packages.adapters.vector_qdrant import QdrantVectorStoreAdapter
 from packages.domain.errors import ValidationAppError
-from packages.infra.config import get_settings
 from packages.infra.db import get_session_factory
 from packages.infra.qdrant_client import get_qdrant
 
@@ -23,20 +22,25 @@ def _collection_name(namespace: str) -> str:
     return f"ns_{digest}"
 
 
-def _embedding_adapter() -> OpenAICompatibleEmbeddingAdapter:
-    settings = get_settings()
+async def _embedding_adapter(tenant_id: str) -> OpenAICompatibleEmbeddingAdapter:
+    from packages.governance.model_service import load_runtime_model
+
+    creds = await load_runtime_model(tenant_id, "embedding")
     return OpenAICompatibleEmbeddingAdapter(
-        settings.xinference_base_url,
-        "",
-        settings.xinference_embedding_model_uid,
+        creds["base_url"],
+        creds["api_key"],
+        creds["model_name"],
     )
 
 
-def _rerank_adapter() -> XinferenceRerankAdapter:
-    settings = get_settings()
+async def _rerank_adapter(tenant_id: str) -> XinferenceRerankAdapter:
+    from packages.governance.model_service import load_runtime_model
+
+    creds = await load_runtime_model(tenant_id, "rerank")
     return XinferenceRerankAdapter(
-        settings.xinference_base_url,
-        settings.xinference_rerank_model_uid,
+        creds["base_url"],
+        creds["model_name"],
+        api_key=creds["api_key"],
     )
 
 
@@ -247,7 +251,7 @@ async def index_texts(
     if not chunks:
         raise ValidationAppError("no chunks produced")
 
-    embedder = _embedding_adapter()
+    embedder = await _embedding_adapter(tenant_id)
     vectors = await embedder.embed([c for c, _ in chunks])
     dimension = len(vectors[0])
     ns = await _get_or_create_ns(session, tenant_id, namespace, dimension)
@@ -339,7 +343,7 @@ async def search(
             "reranked": False,
         }
 
-    embedder = _embedding_adapter()
+    embedder = await _embedding_adapter(tenant_id)
     vector = (await embedder.embed([query]))[0]
     client = get_qdrant()
     recall_limit = max(int(recall_n), int(top_k))
@@ -395,7 +399,9 @@ async def search(
     if rerank and candidates:
         # 开启 rerank 后不做降级：静默退回向量分数会让排序质量无声变差且无法察觉
         docs = [c["content"] for c in candidates]
-        ranked = await _rerank_adapter().rerank(query, docs, top_n=top_k)
+        ranked = await (await _rerank_adapter(tenant_id)).rerank(
+            query, docs, top_n=top_k
+        )
         candidates = [
             {
                 **candidates[item["index"]],
