@@ -1,4 +1,4 @@
-"""本地启动入口：保证仓库根目录在 PYTHONPATH。"""
+"""本地启动框架 API：保证仓库根目录在 PYTHONPATH。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ if str(API_DIR) not in sys.path:
 
 import uvicorn
 
-from packages.infra.config import get_settings
+from framework.infra.config import get_settings
 
 
 def main() -> None:

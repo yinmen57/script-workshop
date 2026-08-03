@@ -1,0 +1,281 @@
+"""应用注册表：框架只提供注册/查询，不硬编码业务 App。"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from framework.domain.errors import NotFoundError, ValidationAppError
+
+_SPLIT_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
+_apps: dict[str, dict[str, Any]] = {}
+_loaded = False
+
+AppSpecBuilder = Callable[[], dict[str, Any]]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _count_knowledge_entries(corpus_dir: Path) -> int:
+    total = 0
+    for md_file in sorted(corpus_dir.rglob("*.md")):
+        text = md_file.read_text(encoding="utf-8")
+        total += sum(1 for block in _SPLIT_RE.split(text) if block.strip())
+    return total
+
+
+def _load_knowledge(workspace: Path) -> list[dict[str, Any]]:
+    """读取 knowledge/manifest.yaml；无目录则空列表。"""
+    knowledge_dir = workspace / "knowledge"
+    if not knowledge_dir.is_dir():
+        return []
+    manifest_path = knowledge_dir / "manifest.yaml"
+    if not manifest_path.is_file():
+        raise ValidationAppError("knowledge/ 存在时必须提供 manifest.yaml")
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValidationAppError("knowledge/manifest.yaml 顶层必须是对象")
+    items = data.get("namespaces") or []
+    if not isinstance(items, list) or not items:
+        raise ValidationAppError("knowledge/manifest.yaml 必须声明 namespaces 列表")
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValidationAppError(f"knowledge namespaces[{index}] 必须是对象")
+        namespace = item.get("namespace")
+        sub_dir = item.get("dir")
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise ValidationAppError(f"knowledge namespaces[{index}] 缺少 namespace")
+        if not isinstance(sub_dir, str) or not sub_dir.strip():
+            raise ValidationAppError(f"knowledge namespaces[{index}] 缺少 dir")
+        namespace = namespace.strip()
+        sub_dir = sub_dir.strip().replace("\\", "/")
+        if namespace in seen:
+            raise ValidationAppError(f"knowledge namespace 重复：{namespace}")
+        seen.add(namespace)
+        corpus_dir = knowledge_dir / sub_dir
+        if not corpus_dir.is_dir():
+            raise ValidationAppError(f"知识库语料目录不存在：knowledge/{sub_dir}")
+        description = item.get("description") or ""
+        result.append(
+            {
+                "namespace": namespace,
+                "dir": sub_dir,
+                "description": (description or "").strip()
+                if isinstance(description, str)
+                else "",
+                "entry_count": _count_knowledge_entries(corpus_dir),
+                "source_path": "knowledge/manifest.yaml",
+            }
+        )
+    return result
+
+
+def _finalize_app(spec: dict[str, Any]) -> dict[str, Any]:
+    workspace = Path(spec["workspace_path"])
+    if not workspace.is_dir():
+        raise ValidationAppError(f"应用工作区不存在：{workspace}")
+    knowledge = _load_knowledge(workspace)
+    knowledge_ns = {item["namespace"] for item in knowledge}
+    agents = []
+    for raw in spec["agents"]:
+        agent = dict(raw)
+        for ns in agent.get("namespaces") or []:
+            if ns not in knowledge_ns:
+                raise ValidationAppError(
+                    f"agents/{agent['agent_id']} 引用了未声明命名空间：{ns}"
+                )
+        agent.setdefault("prompts", [])
+        agents.append(agent)
+
+    coordinators = [a for a in agents if a["role"] == "coordinator"]
+    if len(coordinators) != 1:
+        raise ValidationAppError("应用必须且只能有一个 coordinator")
+    if coordinators[0]["agent_id"] != spec["coordinator"]:
+        raise ValidationAppError("coordinator 必须指向唯一协调 Agent")
+
+    tools = list(spec.get("tools") or [])
+    tool_catalog = {str(item["id"]): dict(item) for item in tools if item.get("id")}
+
+    return {
+        **spec,
+        "agents": agents,
+        "tools": tools,
+        "tool_catalog": tool_catalog,
+        "knowledge": knowledge,
+        "load_status": "ready",
+        "validation_error": None,
+        "loaded_at": _now(),
+        "coordinator_agent_id": spec["coordinator"],
+    }
+
+
+def clear_apps() -> None:
+    """清空注册表（测试或重新加载前调用）。"""
+    global _loaded
+    _apps.clear()
+    _loaded = False
+
+
+def register_app(spec: dict[str, Any]) -> None:
+    """注册单个应用规格；失败时写入 error 快照，不中断其它 App。"""
+    global _loaded
+    slug = str(spec.get("slug") or "").strip()
+    if not slug:
+        raise ValidationAppError("应用规格缺少 slug")
+    try:
+        _apps[slug] = _finalize_app(spec)
+    except Exception as exc:  # noqa: BLE001
+        _apps[slug] = {
+            **spec,
+            "agents": [],
+            "tools": [],
+            "tool_catalog": {},
+            "knowledge": [],
+            "load_status": "error",
+            "validation_error": str(exc),
+            "loaded_at": _now(),
+            "coordinator_agent_id": "",
+        }
+    _loaded = True
+
+
+def register_apps(builders: Iterable[AppSpecBuilder]) -> None:
+    """用一组 builder 全量重建注册表。"""
+    clear_apps()
+    for builder in builders:
+        register_app(builder())
+
+
+def _ensure_loaded() -> None:
+    if not _loaded:
+        raise RuntimeError(
+            "应用注册表为空：请在进程启动时调用 register_apps([...]) 注入应用"
+        )
+
+
+def list_workspaces(tenant_id: str) -> dict[str, Any]:
+    _ensure_loaded()
+    items = []
+    for snap in sorted(_apps.values(), key=lambda x: x["slug"]):
+        if snap.get("load_status") == "ready" and snap.get("tenant_id") != tenant_id:
+            continue
+        items.append(
+            {
+                "slug": snap["slug"],
+                "name": snap["name"],
+                "description": snap.get("description") or "",
+                "workspace_path": snap["workspace_path"],
+                "coordinator_agent_id": snap.get("coordinator_agent_id") or "",
+                "agent_count": len(snap.get("agents") or []),
+                "load_status": snap["load_status"],
+                "validation_error": snap.get("validation_error"),
+                "loaded_at": snap.get("loaded_at"),
+            }
+        )
+    return {
+        "items": items,
+        "total": len(items),
+        "page": 1,
+        "page_size": max(len(items), 1),
+    }
+
+
+def get_workspace(tenant_id: str, slug: str) -> dict[str, Any]:
+    _ensure_loaded()
+    snap = _apps.get(slug)
+    if snap is None:
+        raise NotFoundError("workspace not found")
+    if (
+        snap.get("load_status") == "ready"
+        and snap.get("tenant_id")
+        and snap["tenant_id"] != tenant_id
+    ):
+        raise NotFoundError("workspace not found")
+
+    agents_out = []
+    for a in snap.get("agents") or []:
+        tool_ids = list(a.get("allowed_tools") or [])
+        if a.get("role") == "coordinator":
+            for s in snap.get("agents") or []:
+                if s.get("role") == "specialist":
+                    tool_ids.append(f"delegate_to_{s['agent_id']}")
+        agents_out.append(
+            {
+                "agent_id": a["agent_id"],
+                "name": a["name"],
+                "role": a["role"],
+                "description": a.get("description") or "",
+                "system_prompt_path": a.get("system_prompt_path") or "",
+                "allowed_tools": tool_ids,
+                "namespaces": a.get("namespaces") or [],
+                "max_steps": a.get("max_steps") or 8,
+                "source_path": a.get("source_path") or "",
+                "prompts": a.get("prompts") or [],
+            }
+        )
+    knowledge_out = []
+    for item in snap.get("knowledge") or []:
+        used_by = [
+            a["agent_id"]
+            for a in agents_out
+            if item["namespace"] in (a.get("namespaces") or [])
+        ]
+        knowledge_out.append({**item, "used_by_agents": used_by})
+    return {
+        "slug": snap["slug"],
+        "name": snap["name"],
+        "description": snap.get("description") or "",
+        "workspace_path": snap["workspace_path"],
+        "coordinator_agent_id": snap.get("coordinator_agent_id") or "",
+        "collaboration_mode": snap.get("collaboration_mode"),
+        "load_status": snap["load_status"],
+        "validation_error": snap.get("validation_error"),
+        "loaded_at": snap.get("loaded_at"),
+        "max_steps": snap.get("max_steps"),
+        "model": snap.get("model") or {},
+        "agents": agents_out,
+        "tools": snap.get("tools") or [],
+        "knowledge": knowledge_out,
+    }
+
+
+def get_runtime_app(tenant_id: str, slug: str) -> dict[str, Any]:
+    """供 chat / LangGraph 运行时使用。"""
+    _ensure_loaded()
+    snap = _apps.get(slug)
+    if snap is None or snap.get("load_status") != "ready":
+        raise NotFoundError("workspace not found or not ready")
+    if snap.get("tenant_id") != tenant_id:
+        raise NotFoundError("workspace not found or not ready")
+    coordinator = next(
+        (a for a in snap["agents"] if a["role"] == "coordinator"),
+        None,
+    )
+    if coordinator is None:
+        raise ValidationAppError("coordinator agent missing")
+    return {
+        "slug": snap["slug"],
+        "tenant_id": snap["tenant_id"],
+        "name": snap["name"],
+        "status": "enabled",
+        "workspace_path": snap["workspace_path"],
+        "coordinator_agent_id": coordinator["agent_id"],
+        "system_prompt": coordinator["system_prompt_content"],
+        "system_prompt_path": coordinator.get("system_prompt_path") or "",
+        "model": snap["model"],
+        "max_steps": int(coordinator.get("max_steps") or snap.get("max_steps") or 8),
+        "agents": list(snap["agents"]),
+        "tools": list(snap.get("tools") or []),
+        "tool_catalog": dict(snap.get("tool_catalog") or {}),
+        "collaboration_mode": snap.get("collaboration_mode"),
+    }

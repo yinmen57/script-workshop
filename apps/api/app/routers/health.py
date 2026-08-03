@@ -5,10 +5,10 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.schemas import HealthResponse, ReadyResponse
-from packages.infra.db import ping_mysql
-from packages.infra.oss import ping_oss
-from packages.infra.qdrant_client import ping_qdrant
-from packages.infra.redis_client import ping_redis
+from framework.infra.db import ping_mysql
+from framework.infra.oss import ping_oss
+from framework.infra.qdrant_client import ping_qdrant
+from framework.infra.redis_client import ping_redis
 
 router = APIRouter(tags=["health"])
 

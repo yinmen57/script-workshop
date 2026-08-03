@@ -44,7 +44,7 @@ services:
       - "${RABBITMQ_PORT:-5672}:5672"
       - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     environment:
-      # guest 仅本机可用；容器间通信必须用自定义用户
+      # guest ???????????????????
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ai}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ai_platform}
     volumes:
@@ -70,14 +70,25 @@ services:
       timeout: 5s
       retries: 10
 
-  # 后端 API：Docker 部署；前端本地 npm 运行
-  # 对象存储走阿里云 OSS（.env 的 OSS_*），不在本机部署 MinIO
+  # ?? API????? / ???? / ?? / AI Key / ??
+  # ???????? OSS?.env ? OSS_*???????? MinIO
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     container_name: ai-api
     restart: unless-stopped
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--app-dir",
+        "/app/apps/api",
+      ]
     env_file:
       - .env
     environment:
@@ -93,7 +104,61 @@ services:
     ports:
       - "${APP_PORT:-42867}:8000"
     volumes:
-      - ./packages:/app/packages:ro
+      - ./framework:/app/framework:ro
+      - ./business:/app/business:ro
+      - ./alembic:/app/alembic:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # ?? API?? /api/v1/script-biz
+  biz-api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ai-biz-api
+    restart: unless-stopped
+    command:
+      [
+        "uvicorn",
+        "app.biz_main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--app-dir",
+        "/app/apps/api",
+      ]
+    env_file:
+      - .env
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
+    ports:
+      - "${BIZ_APP_PORT:-42868}:8000"
+    volumes:
+      - ./framework:/app/framework:ro
+      - ./business:/app/business:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:
@@ -122,7 +187,7 @@ services:
       [
         "celery",
         "-A",
-        "packages.infra.celery_app.celery_app",
+        "business.jobs.celery_app",
         "worker",
         "-Q",
         "sync",
@@ -144,7 +209,8 @@ services:
       QDRANT_PORT: 6333
       CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
     volumes:
-      - ./packages:/app/packages:ro
+      - ./framework:/app/framework:ro
+      - ./business:/app/business:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:
@@ -170,7 +236,7 @@ services:
       [
         "celery",
         "-A",
-        "packages.infra.celery_app.celery_app",
+        "business.jobs.celery_app",
         "worker",
         "-Q",
         "gen.submit,gen.finalize",
@@ -192,7 +258,8 @@ services:
       QDRANT_PORT: 6333
       CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
     volumes:
-      - ./packages:/app/packages:ro
+      - ./framework:/app/framework:ro
+      - ./business:/app/business:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:
@@ -218,7 +285,7 @@ services:
       [
         "celery",
         "-A",
-        "packages.infra.celery_app.celery_app",
+        "business.jobs.celery_app",
         "beat",
         "-l",
         "INFO",
@@ -232,7 +299,8 @@ services:
       REDIS_PORT: 6379
       CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ai}:${RABBITMQ_PASSWORD:-ai_platform}@rabbitmq:5672//
     volumes:
-      - ./packages:/app/packages:ro
+      - ./framework:/app/framework:ro
+      - ./business:/app/business:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:

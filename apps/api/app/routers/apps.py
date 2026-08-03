@@ -5,9 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.deps import AuthDep, DbSession
-from packages.domain.permissions import APP_READ
-from packages.agent_apps import registry
-from packages.governance import vector_namespace_service
+from framework.domain.permissions import APP_READ
+from framework.agent_apps import registry
+from framework.governance import vector_namespace_service
 
 router = APIRouter(prefix="/apps", tags=["apps"])
 

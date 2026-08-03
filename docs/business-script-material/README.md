@@ -1,8 +1,8 @@
 # 剧本工坊业务文档
 
 垂直业务：剧本解析 → 物料 → 分镜 → 成片视频。  
-代码落在 `packages/business_script`、`apps-space/script-workshop`、`/api/v1/script-biz`。  
-框架侧见 [../enterprise-langchain/08-agent-framework-pivot.md](../enterprise-langchain/08-agent-framework-pivot.md)。
+代码落在 `business/script`、`apps-space/script-workshop`、`/api/v1/script-biz`。  
+框架侧实现见 [../../framework/agent_apps/README.md](../../framework/agent_apps/README.md)；设计备忘见 [../../framework/design/08-agent-framework-pivot.md](../../framework/design/08-agent-framework-pivot.md)。
 
 ## 文档索引
 
@@ -15,7 +15,7 @@
 | [02-sd-api-key-and-calls.md](./02-sd-api-key-and-calls.md) | 赏舞开放 API 鉴权与调用 |
 | [03-sd-config.md](./03-sd-config.md) | 赏舞历史 `SD_*` 说明（密钥已迁 AI Key 页，仅作对照） |
 | [08-ark-image-video-integration.md](./08-ark-image-video-integration.md) | **方舟 Seedream/Seedance 对接**：官方文档索引、接口子集、与赏舞分流、落地映射 |
-| [09-generation-async-reliability.md](./09-generation-async-reliability.md) | **长耗时生成可靠性**（建在 Celery+RabbitMQ 上）：槽位、短轮询、claim、快照、对账；总线通则见 [../enterprise-langchain/09-celery-rabbitmq-job-bus.md](../enterprise-langchain/09-celery-rabbitmq-job-bus.md) |
+| [09-generation-async-reliability.md](./09-generation-async-reliability.md) | **长耗时生成可靠性**（建在 Celery+RabbitMQ 上）：槽位、短轮询、claim、快照、对账；总线通则见 [../../framework/design/09-celery-rabbitmq-job-bus.md](../../framework/design/09-celery-rabbitmq-job-bus.md) |
 
 ## 已删除
 

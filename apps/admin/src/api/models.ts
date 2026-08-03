@@ -1,7 +1,13 @@
 import { api } from "./client";
 import type { PageResult } from "./resources";
 
-export type ModelType = "chat" | "embedding" | "rerank" | "image" | "video";
+export type ModelType =
+  | "chat"
+  | "audio"
+  | "embedding"
+  | "rerank"
+  | "image"
+  | "video";
 
 export type ModelItem = {
   id: string;
@@ -18,6 +24,32 @@ export type ModelItem = {
   has_api_key: boolean;
   created_at: string | null;
   updated_at: string | null;
+};
+
+export type ModelTypeSpec = {
+  type_id: ModelType;
+  label: string;
+  description: string;
+  default_provider: string;
+  providers: string[] | null;
+  provider_labels: Record<string, string>;
+  requires_dimension: boolean;
+  forbids_dimension: boolean;
+  requires_api_key_on_create: boolean;
+  allow_empty_api_key_runtime: boolean;
+  model_name_placeholder: string;
+  base_url_placeholder: string;
+};
+
+export type ModelCategory = {
+  category_id: string;
+  label: string;
+  types: ModelTypeSpec[];
+};
+
+export type ModelCatalog = {
+  categories: ModelCategory[];
+  types: Array<ModelTypeSpec & { category_id: string; category_label: string; sort_order: number }>;
 };
 
 export type ModelListParams = {
@@ -48,6 +80,11 @@ export type ModelTestResult = {
   latency_ms: number;
   detail: Record<string, unknown>;
 };
+
+export async function fetchModelCatalog() {
+  const { data } = await api.get<ModelCatalog>("/models/catalog");
+  return data;
+}
 
 export async function listModels(params: ModelListParams = {}) {
   const { data } = await api.get<PageResult<ModelItem>>("/models", { params });

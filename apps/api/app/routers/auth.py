@@ -6,9 +6,9 @@ from fastapi import APIRouter, Request
 
 from app.deps import AuthDep, DbSession, RequestIdDep
 from app.schemas import LoginRequest, MeResponse, TokenResponse
-from packages.governance.audit import write_audit
-from packages.governance.auth_service import get_me, login
-from packages.governance.security import create_access_token, decode_token
+from framework.governance.audit import write_audit
+from framework.governance.auth_service import get_me, login
+from framework.governance.security import create_access_token, decode_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -38,17 +38,17 @@ async def auth_login(
 async def auth_refresh(body: dict, session: DbSession) -> TokenResponse:
     refresh_token = body.get("refresh_token")
     if not refresh_token:
-        from packages.domain.errors import ValidationAppError
+        from framework.domain.errors import ValidationAppError
 
         raise ValidationAppError("refresh_token required")
     payload = decode_token(refresh_token)
     if payload.get("type") != "refresh":
-        from packages.domain.errors import UnauthorizedError
+        from framework.domain.errors import UnauthorizedError
 
         raise UnauthorizedError("invalid refresh token")
 
-    from packages.governance.auth_service import load_permissions
-    from packages.governance.security import create_refresh_token
+    from framework.governance.auth_service import load_permissions
+    from framework.governance.security import create_refresh_token
 
     permissions = await load_permissions(session, payload["sub"])
     access = create_access_token(

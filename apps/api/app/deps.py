@@ -8,10 +8,10 @@ from typing import Annotated
 from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.domain.context import AuthContext
-from packages.domain.errors import UnauthorizedError
-from packages.governance.auth_service import resolve_bearer
-from packages.infra.db import get_session_factory
+from framework.domain.context import AuthContext
+from framework.domain.errors import UnauthorizedError
+from framework.governance.auth_service import resolve_bearer
+from framework.infra.db import get_session_factory
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

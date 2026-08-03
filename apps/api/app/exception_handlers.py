@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError as PydanticValidationError
 
-from packages.domain.errors import AppError
+from framework.domain.errors import AppError
 
 
 def register_exception_handlers(app: FastAPI) -> None:

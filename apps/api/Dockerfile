@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir \
     --trusted-host pypi.tuna.tsinghua.edu.cn \
     -r /app/apps/api/requirements.txt
 
-COPY packages /app/packages
+COPY framework /app/framework
+COPY business /app/business
 COPY apps/__init__.py /app/apps/__init__.py
 COPY apps/api /app/apps/api
 # 剧本业务表迁移
@@ -33,5 +34,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --retries=10 \
   CMD curl -fsS http://127.0.0.1:8000/api/v1/health || exit 1
 
-# API 默认入口；Celery worker/beat 在 compose 中覆盖 command
+# 默认框架 API；业务 API：app.biz_main:app；Celery 在 compose 中覆盖 command
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "/app/apps/api"]

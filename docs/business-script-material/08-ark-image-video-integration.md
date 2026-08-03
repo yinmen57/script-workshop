@@ -262,11 +262,11 @@ P0 轮询建议：间隔 5～15 秒；超时单独配置（视频通常数分钟
 
 | 模块 | 职责 |
 |------|------|
-| `packages/adapters/ark_image_client.py` | Seedream：`/images/generations` |
-| `packages/adapters/ark_video_client.py` | Seedance：创建 + 查询轮询 |
-| `packages/adapters/sd_client.py` | 赏舞（已有） |
-| `packages/business_script/render_service.py` | 按 `provider` 分流 |
-| `packages/governance/model_service.py` | `image`/`video` + provider 校验与解密 |
+| `business/adapters/ark_image_client.py` | Seedream：`/images/generations` |
+| `business/adapters/ark_video_client.py` | Seedance：创建 + 查询轮询 |
+| `business/adapters/sd_client.py` | 赏舞（已有） |
+| `business/script/render_service.py` | 按 `provider` 分流 |
+| `framework/governance/model_service.py` | `image`/`video` + provider 校验与解密 |
 | `apps/admin` ModelsPage | Provider 可选「赏舞 / 火山方舟」 |
 
 业务入口不变：

@@ -1,7 +1,7 @@
 # 长耗时生成：异步调度与可靠性
 
 > 目标：生图 / 生视频（赏舞、方舟 Seedream/Seedance）不再占用 Worker 做「sleep 长轮询」，改为 **提交与轮询分离**、可 claim、可对账、可排查。  
-> **作业总线已决策为 Celery + RabbitMQ（全局唯一）**，统一方法见 [../enterprise-langchain/09-celery-rabbitmq-job-bus.md](../enterprise-langchain/09-celery-rabbitmq-job-bus.md)。  
+> **作业总线已决策为 Celery + RabbitMQ（全局唯一）**，统一方法见 [../../framework/design/09-celery-rabbitmq-job-bus.md](../../framework/design/09-celery-rabbitmq-job-bus.md)。  
 > 上游协议见 [08-ark-image-video-integration.md](./08-ark-image-video-integration.md)。
 
 ---
@@ -70,7 +70,7 @@ submit_job → Stream → worker process_job_message
 | `gen.finalize` | `gen.finalize_one` | `generation_task_id` |
 | （Beat） | `gen.dispatch_pending` / `gen.poll_waiting` / `gen.reconcile` | 无业务 ID |
 
-投递一律经 `packages.infra.jobs` 封装（见平台总线文档），业务不直接碰 Celery API。
+投递一律经 `framework.infra.jobs` 封装（见平台总线文档），业务不直接碰 Celery API。
 
 生成类 `job_run.kind`：`render_material_image`、`render_video`。  
 创建后写 `generation_task(pending)`，**不再**端到端长跑。
@@ -174,7 +174,7 @@ Celery worker：`acks_late=true`，`prefetch_multiplier=1`（生成队列）。
 
 | 模块 | 改造 |
 |------|------|
-| `packages/infra/celery_app.py` + `jobs/` | 新建；统一 enqueue |
+| `framework/infra/celery_app.py` + `jobs/` | 新建；统一 enqueue |
 | `job_service.submit_job` | 短任务 → Celery `sync`；生成 → `generation_task` |
 | `job_dispatch` / `render_service` | 拆 submit / finalize；删除长 poll 循环 |
 | 适配器 | 仅单次 `get_task` / 同步生图 |
@@ -187,7 +187,7 @@ Celery worker：`acks_late=true`，`prefetch_multiplier=1`（生成队列）。
 
 ## 10. 实现顺序
 
-1. 按 [平台总线文档](../enterprise-langchain/09-celery-rabbitmq-job-bus.md) 接通 Celery + RabbitMQ + `sync.run_job_run`（先迁短任务）。  
+1. 按 [平台总线文档](../../framework/design/09-celery-rabbitmq-job-bus.md) 接通 Celery + RabbitMQ + `sync.run_job_run`（先迁短任务）。  
 2. Alembic：`generation_task`。  
 3. `gen.submit_one` / `gen.finalize_one` + 拆 `render_service`。  
 4. Beat：dispatch / poll / reconcile。  

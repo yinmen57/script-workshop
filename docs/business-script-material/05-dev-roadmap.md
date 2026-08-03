@@ -43,7 +43,7 @@
 | 片段编组 | 按 04 的 **2.2.1**：由 LLM 按分镜内容判定哪几镜能一次连贯拍完，只收镜号不收正文；15 秒只作硬校验，多镜合计超限即判失败，不做机械累加兜底 |
 | 知识库粒度 | 项目命名空间为可重建副本（叙事空间+人物+场景）；工作台 DB 为唯一事实；上传不盲切；删除项目清向量 |
 | product 建模 | 不做产品替换；不建 `product_asset`；知识库中带货相关条目一并删除 |
-| 业务表迁移 | **Alembic**；补 `packages/business_script/models.py` 作 schema 唯一来源，服务层可继续裸 SQL |
+| 业务表迁移 | **Alembic**；补 `business/script/models.py` 作 schema 唯一来源，服务层可继续裸 SQL |
 | 迁移接管范围 | 现状 stamp 为 baseline；**剧本业务表**交 Alembic；平台基础表仍留 `init.sql` |
 | 清障范围（第一段） | 只删未挂载的 `kb_service` + `knowledge_bases` router；九张死表、Qdrant 异步化、core↔governance 循环依赖本期不动 |
 | 平台与业务分工 | 业务流水线保持确定性编排；经统一提示词装配层读 `apps-space` 模板并检索工艺知识；ReAct 留给 Playground |
@@ -60,10 +60,10 @@
 
 | 序号 | 任务 | 说明 |
 |------|------|------|
-| 1.1 | 删 legacy 知识库 | 删除 `packages/governance/kb_service.py`、`apps/api/app/routers/knowledge_bases.py`；若 `KB_READ` / `KB_WRITE` 仅被该路由使用则一并删除 |
+| 1.1 | 删 legacy 知识库 | 删除 `framework/governance/kb_service.py`、`apps/api/app/routers/knowledge_bases.py`；若 `KB_READ` / `KB_WRITE` 仅被该路由使用则一并删除 |
 | 1.2 | 撤除 content_type / commerce | 见下文「1.2 撤除清单」；语料改完后必须重新索引 |
 | 1.3 | 接入 Alembic | async engine（aiomysql）；`models.py` 对齐现有九张剧本表；stamp baseline；首个 migration drop `script_project.content_type` |
-| 1.4 | 去掉运行时建表双轨 | 删除 `packages/business_script/schema.py`；`main.py` 不再调用 `ensure_script_schema`；`init.sql` 撤出剧本业务建表段（种子数据保留） |
+| 1.4 | 去掉运行时建表双轨 | 删除 `business/script/schema.py`；`main.py` 不再调用 `ensure_script_schema`；`init.sql` 撤出剧本业务建表段（种子数据保留） |
 
 **1.2 撤除清单（代码与语料）**
 
@@ -123,7 +123,7 @@ docker exec -w /app ai-api alembic upgrade head
 
 | 序号 | 任务 | 说明 | 状态 |
 |------|------|------|------|
-| 4.1 | SD HTTP 客户端 | 读 `SD_*`；鉴权与 scopes 按 02 文档 | 已完成（`packages/adapters/sd_client.py`） |
+| 4.1 | SD HTTP 客户端 | 读 `SD_*`；鉴权与 scopes 按 02 文档 | 已完成（`business/adapters/sd_client.py`） |
 | 4.2 | 生图 / 生视频工具 | `render_material_image` / `render_video` 落地；提交前成本预估 | 已完成（余额预检 + job 投递） |
 | 4.3 | 轮询与落 OSS | 任务状态回写；产物 URI 挂资产 / 叙事空间成片 | 已完成（`material_image` / `video_job`） |
 
@@ -180,4 +180,4 @@ docker exec -w /app ai-api alembic upgrade head
 
 ## 5. 测试策略
 
-不单独排测试专项。从第二段表结构与解析流程定型起，补 `business_script` 服务层测试；第一段以手工验收与迁移可重复执行为主。
+不单独排测试专项。从第二段表结构与解析流程定型起，补 `business.script` 服务层测试；第一段以手工验收与迁移可重复执行为主。

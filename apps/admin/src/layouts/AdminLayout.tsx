@@ -1,11 +1,10 @@
-import {
-  AppstoreOutlined,
-  KeyOutlined,
-  LogoutOutlined,
-  PartitionOutlined,
-} from "@ant-design/icons";
+import { AppstoreOutlined, LogoutOutlined } from "@ant-design/icons";
 import { Layout, Menu, Typography, Button, Space } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  businessMenuItemsFor,
+  resolveBusinessSelectedKey,
+} from "../business/menu";
 import { useAuthStore } from "../stores/auth";
 
 const { Header, Sider, Content } = Layout;
@@ -20,19 +19,13 @@ export function AdminLayout() {
 
   const menuItems = [
     { key: "/apps", icon: <AppstoreOutlined />, label: "应用空间" },
-    { key: "/script-workspace", icon: <PartitionOutlined />, label: "剧本工作台" },
-    ...(hasPermission("model:read")
-      ? [{ key: "/models", icon: <KeyOutlined />, label: "AI Key 配置" }]
-      : []),
+    ...businessMenuItemsFor(hasPermission),
   ];
 
+  const businessKey = resolveBusinessSelectedKey(location.pathname);
   const selectedKey = location.pathname.startsWith("/apps")
     ? "/apps"
-    : location.pathname.startsWith("/script-workspace")
-      ? "/script-workspace"
-      : location.pathname.startsWith("/models")
-        ? "/models"
-        : location.pathname;
+    : businessKey || location.pathname;
 
   return (
     <Layout style={{ minHeight: "100vh" }}>

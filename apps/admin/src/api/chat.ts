@@ -63,6 +63,8 @@ export async function streamChatCompletions(
     session_id?: string | null;
     message: string;
     selection?: ChatSelection | null;
+    /** 指定则只跑该 Agent；不传为全链路 coordinator */
+    agent_id?: string | null;
   },
   handlers: StreamHandlers,
   signal?: AbortSignal,
@@ -132,4 +134,57 @@ export async function getAgentRun(runId: string) {
     answer?: string;
     steps: AgentStep[];
   }>;
+}
+
+export type ChatSessionItem = {
+  id: string;
+  slug: string;
+  title: string;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type ChatMessageItem = {
+  id: string;
+  role: string;
+  content: string;
+  token_count?: number | null;
+  request_id?: string | null;
+  created_at: string | null;
+};
+
+export async function listChatSessions(params: {
+  slug?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  const token = useAuthStore.getState().accessToken;
+  const qs = new URLSearchParams();
+  if (params.slug) qs.set("slug", params.slug);
+  if (params.page) qs.set("page", String(params.page));
+  if (params.page_size) qs.set("page_size", String(params.page_size));
+  const resp = await fetch(`${baseURL}/sessions?${qs}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json() as Promise<{
+    items: ChatSessionItem[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>;
+}
+
+export async function listChatMessages(sessionId: string) {
+  const token = useAuthStore.getState().accessToken;
+  const resp = await fetch(`${baseURL}/sessions/${sessionId}/messages`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json() as Promise<{ items: ChatMessageItem[] }>;
 }

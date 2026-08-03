@@ -5,9 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from app.deps import AuthDep, DbSession, RequestIdDep
-from packages.domain.permissions import MODEL_READ, MODEL_WRITE
-from packages.governance import model_service
-from packages.governance.audit import write_audit
+from framework.domain.permissions import MODEL_READ, MODEL_WRITE
+from framework.governance import model_service
+from framework.governance.audit import write_audit
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -53,6 +53,13 @@ async def list_models(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/catalog")
+async def model_catalog(auth: AuthDep) -> dict:
+    """业务模型类目（语言模型 / 声音 / 生图 / 生视频 / 检索）。"""
+    auth.require(MODEL_READ)
+    return model_service.get_model_catalog()
 
 
 @router.get("/{model_id}")

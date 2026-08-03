@@ -8,9 +8,9 @@ from fastapi import APIRouter, Query
 from sse_starlette.sse import EventSourceResponse
 
 from app.deps import AuthDep, DbSession, RequestIdDep
-from packages.domain.permissions import APP_READ
-from packages.governance import agent_run_service, chat_service
-from packages.governance.audit import write_audit
+from framework.domain.permissions import APP_READ
+from framework.governance import agent_run_service, chat_service
+from framework.governance.audit import write_audit
 
 router = APIRouter(tags=["chat"])
 
@@ -25,10 +25,15 @@ async def chat_completions(
     auth.require(APP_READ)
     slug = body.get("slug") or ""
     selection = body.get("selection")
+    agent_id = body.get("agent_id")
     if selection is not None and not isinstance(selection, dict):
-        from packages.domain.errors import ValidationAppError
+        from framework.domain.errors import ValidationAppError
 
         raise ValidationAppError("selection 必须是对象")
+    if agent_id is not None and not isinstance(agent_id, str):
+        from framework.domain.errors import ValidationAppError
+
+        raise ValidationAppError("agent_id 必须是字符串")
     prepared = await chat_service.prepare_completion(
         session,
         tenant_id=auth.tenant_id,
@@ -38,6 +43,7 @@ async def chat_completions(
         message=body.get("message") or "",
         request_id=request_id,
         selection=selection,
+        agent_id=agent_id,
     )
     await write_audit(
         session,
@@ -47,7 +53,10 @@ async def chat_completions(
         request_id=request_id,
         resource_type="workspace",
         resource_id=slug,
-        payload={"stream": bool(body.get("stream"))},
+        payload={
+            "stream": bool(body.get("stream")),
+            "agent_id": prepared.get("agent_id"),
+        },
     )
 
     if body.get("stream"):

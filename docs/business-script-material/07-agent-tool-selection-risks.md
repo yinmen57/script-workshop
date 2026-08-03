@@ -46,7 +46,7 @@ router
 
 ### 2.2 inspect 查询工具 · 已完成
 
-落点：`packages/business_script/inspect_service.py` + `tools/inspect.yaml`
+落点：`business/script/inspect_service.py` + `tools/inspect.yaml`
 
 支持 scope：
 
@@ -68,7 +68,7 @@ router
 
 ### 2.4 工具执行前置条件校验 · 已完成
 
-落点：`packages/business_script/precondition_service.py`，在 `src/tools.py` 写工具入口调用。
+落点：`business/script/precondition_service.py`，在 `src/tools.py` 写工具入口调用。
 
 覆盖：
 

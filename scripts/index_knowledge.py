@@ -4,7 +4,7 @@
     python scripts/index_knowledge.py --slug script-workshop
     python scripts/index_knowledge.py --slug script-workshop --check "角色三视图怎么写"
 
-语料根目录：packages/agent_apps/<slug>/knowledge/
+语料根目录：business/apps/<slug>/knowledge/
 manifest.yaml 声明 目录 -> namespace 映射；.md 内用单独一行的 --- 分隔条目。
 """
 
@@ -50,7 +50,7 @@ def main() -> int:
     parser.add_argument(
         "--slug",
         required=True,
-        help="应用 slug，如 script-workshop（对应 packages/agent_apps/script_workshop）",
+        help="应用 slug，如 script-workshop（对应 business/apps/script_workshop）",
     )
     # 与 docker-compose 宿主机映射一致（容器内仍是 8000）
     parser.add_argument("--api-base", default="http://127.0.0.1:42867")
@@ -60,7 +60,7 @@ def main() -> int:
     args = parser.parse_args()
 
     pkg_name = args.slug.replace("-", "_")
-    knowledge_dir = REPO_ROOT / "packages" / "agent_apps" / pkg_name / "knowledge"
+    knowledge_dir = REPO_ROOT / "business" / "apps" / pkg_name / "knowledge"
     manifest_path = knowledge_dir / "manifest.yaml"
     if not manifest_path.is_file():
         raise SystemExit(f"缺少清单文件：{manifest_path}")

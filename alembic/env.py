@@ -10,8 +10,8 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from packages.business_script.models import Base
-from packages.infra.config import get_settings
+from business.script.models import Base
+from framework.infra.config import get_settings
 
 config = context.config
 if config.config_file_name is not None:

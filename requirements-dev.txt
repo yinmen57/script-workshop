@@ -1,0 +1,6 @@
+# 开发 / 测试依赖（在 apps/api/requirements.txt 之上）
+# 建议国内源安装：
+#   .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+-r apps/api/requirements.txt
+pytest>=8.3.0
+pytest-asyncio>=0.24.0

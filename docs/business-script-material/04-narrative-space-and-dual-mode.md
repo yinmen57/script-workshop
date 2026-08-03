@@ -2,7 +2,7 @@
 
 > 本文定义剧本工坊的目标产品形态，是领域与交互决策的唯一依据。  
 > 实施顺序与验收见 [05-dev-roadmap.md](./05-dev-roadmap.md)。  
-> 框架侧 Agent 运行时见 [../enterprise-langchain/08-agent-framework-pivot.md](../enterprise-langchain/08-agent-framework-pivot.md)。
+> 框架侧 Agent 运行时见 [../../framework/agent_apps/README.md](../../framework/agent_apps/README.md)；设计备忘见 [../../framework/design/08-agent-framework-pivot.md](../../framework/design/08-agent-framework-pivot.md)。
 
 本文固定两件事：
 
@@ -273,9 +273,9 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 | 租户 / JWT / 审计 / OSS | 平台原样复用 |
 | Chat / 工艺知识检索 | 平台能力；业务经 `knowledge_context` 装配，不把整条流水线塞进 ReAct |
 | 生图 / 生视频 | 赏舞开放 API（`SD_*`），本仓只做薄客户端 |
-| 业务状态与资产 | `packages/business_script` + MySQL |
+| 业务状态与资产 | `business/script` + MySQL |
 
-依赖方向：`business_script → governance / adapters / infra`（禁止反向）。
+依赖方向：`business.script → framework.governance / framework.adapters / framework.infra`（禁止反向）。
 
 ## 9. 明确不做
 
