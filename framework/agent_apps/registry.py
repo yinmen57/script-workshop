@@ -219,6 +219,8 @@ def get_workspace(tenant_id: str, slug: str) -> dict[str, Any]:
                 "allowed_tools": tool_ids,
                 "namespaces": a.get("namespaces") or [],
                 "max_steps": a.get("max_steps") or 8,
+                "thinking": bool(a.get("thinking")),
+                "sample_prompts": list(a.get("sample_prompts") or []),
                 "source_path": a.get("source_path") or "",
                 "prompts": a.get("prompts") or [],
             }

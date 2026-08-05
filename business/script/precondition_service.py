@@ -1,6 +1,6 @@
 """写工具执行前的前置条件校验。
 
-选择 Agent 的结论只能视为建议；本模块在投递 job / 执行写操作前重新查库裁决。
+router / 专业 Agent 的结论只能视为建议；本模块在投递 job / 执行写操作前重新查库裁决。
 失败时抛出带 code / next_action 的 ValidationAppError。
 """
 

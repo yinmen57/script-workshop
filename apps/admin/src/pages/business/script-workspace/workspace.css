@@ -144,6 +144,37 @@
   align-self: flex-start;
   background: #f3f4f6;
   color: var(--ws-text);
+  white-space: normal;
+}
+
+.script-workspace__reasoning {
+  margin: -2px 0 6px;
+}
+
+.script-workspace__reasoning .ant-collapse-header {
+  padding: 0 !important;
+  align-items: center !important;
+  color: #64748b !important;
+  font-size: 12px !important;
+}
+
+.script-workspace__reasoning .ant-collapse-content-box {
+  padding: 6px 0 0 !important;
+}
+
+.script-workspace__reasoning-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.script-workspace__assistant-body {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .script-workspace__msg--step {

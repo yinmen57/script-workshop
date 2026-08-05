@@ -77,7 +77,12 @@ def extract_json_object(content: str) -> dict[str, Any]:
     return data
 
 
-async def chat_json(messages: list[dict[str, Any]]) -> dict[str, Any]:
+async def chat_json(
+    messages: list[dict[str, Any]],
+    *,
+    thinking: bool = False,
+) -> dict[str, Any]:
+    """结构化 JSON 任务默认关闭深度思考。"""
     adapter = await chat_adapter()
-    result = await adapter.chat(messages)
+    result = await adapter.chat(messages, thinking=thinking)
     return extract_json_object(result.get("content") or "")

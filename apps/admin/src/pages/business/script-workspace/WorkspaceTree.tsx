@@ -5,6 +5,7 @@ import { Spin, Tabs, Tag, Tree, Typography, message } from "antd";
 import type { DataNode, EventDataNode } from "antd/es/tree";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   getScriptAssets,
   getScriptStructure,
@@ -27,6 +28,11 @@ type Props = {
   selection: WorkspaceSelection | null;
   onSelect: (sel: WorkspaceSelection) => void;
 };
+
+/** 物料提示词跳转独立确认画布 */
+function materialConfirmPath(promptId: string) {
+  return `/script-biz/generate/image/${promptId}`;
+}
 
 type LazyKey = string;
 
@@ -58,12 +64,15 @@ export function WorkspaceTree({
   selection,
   onSelect,
 }: Props) {
+  const navigate = useNavigate();
   const [expanded, setExpanded] = useState<string[]>([]);
   const [spaceChildren, setSpaceChildren] = useState<
     Record<string, DataNode[]>
   >({});
   /** 片段 / 分镜 → 所属叙事空间，供选中时回填 */
   const [ownerSpace, setOwnerSpace] = useState<Record<string, string>>({});
+  /** 分镜 → 所属视频片段（画布单位） */
+  const [ownerSegment, setOwnerSegment] = useState<Record<string, string>>({});
   const [ownerEpisode, setOwnerEpisode] = useState<Record<string, string>>({});
   const [loadingKeys, setLoadingKeys] = useState<Set<LazyKey>>(new Set());
 
@@ -163,12 +172,14 @@ export function WorkspaceTree({
         }
         setSpaceChildren((prev) => ({ ...prev, [spaceId]: nodes }));
         const nextOwner: Record<string, string> = {};
+        const nextSeg: Record<string, string> = {};
         const nextEp: Record<string, string> = {};
         for (const seg of segBundle.items || []) {
           nextOwner[`segment:${seg.id}`] = spaceId;
           nextEp[`segment:${seg.id}`] = episodeId;
           for (const sid of seg.shot_ids || []) {
             nextOwner[`shot:${sid}`] = spaceId;
+            nextSeg[`shot:${sid}`] = seg.id;
             nextEp[`shot:${sid}`] = episodeId;
           }
         }
@@ -177,6 +188,7 @@ export function WorkspaceTree({
           nextEp[`shot:${shot.id}`] = episodeId;
         }
         setOwnerSpace((prev) => ({ ...prev, ...nextOwner }));
+        setOwnerSegment((prev) => ({ ...prev, ...nextSeg }));
         setOwnerEpisode((prev) => ({ ...prev, ...nextEp }));
       } catch (e) {
         message.error(e instanceof Error ? e.message : "加载片段失败");
@@ -356,6 +368,7 @@ export function WorkspaceTree({
         project_id: projectId,
         episode_id: ownerEpisode[key],
         narrative_space_id: ownerSpace[key],
+        video_segment_id: ownerSegment[key],
         shot_id: id,
         title: `分镜 ${id.slice(-6)}`,
       };
@@ -474,7 +487,13 @@ export function WorkspaceTree({
             selectedKeys={selectedKeys}
             onSelect={(_, info) => {
               const sel = resolveSelection(String(info.node.key));
-              if (sel) onSelect(sel);
+              if (!sel) return;
+              // 物料提示词：直接进入独立确认画布
+              if (sel.type === "material_prompt") {
+                navigate(materialConfirmPath(sel.id));
+                return;
+              }
+              onSelect(sel);
             }}
           />
         )}

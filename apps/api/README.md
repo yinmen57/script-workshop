@@ -21,7 +21,7 @@
 | `/api/v1/health` `/ready` | 健康检查 |
 | `/api/v1/auth` | 登录 / 当前用户 |
 | `/api/v1/apps` | 应用空间列表与详情（读注册表） |
-| `/api/v1/chat` | 对话 completions、sessions、agent runs |
+| `/api/v1/chat` | 对话（POST 非流式 / WS 流式）、sessions、agent runs |
 | `/api/v1/index` | 向量索引与检索 |
 | `/api/v1/models` | AI Key CRUD / 测通 |
 
@@ -29,16 +29,22 @@ Lifespan：`ensure_chat_schema` + **`register_business_apps()`**（Agent 注册�
 
 ### Chat 请求要点
 
+流式：`WS /api/v1/chat/ws?token=<access_token>`，首包：
+
 ```json
 {
+  "action": "chat",
   "slug": "script-workshop",
   "message": "...",
-  "stream": true,
   "agent_id": "parser",
   "session_id": null,
   "selection": {}
 }
 ```
+
+推送事件：`reasoning` / `delta` / `step` / `usage` / `done` / `error`。取消：`{"action":"cancel"}`。
+
+非流式：`POST /api/v1/chat/completions`（不要带 `stream: true`）。
 
 - 不传 `agent_id`：全链路 coordinator + handoff  
 - 传 specialist：`agent_id` 单 Agent  

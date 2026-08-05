@@ -11,4 +11,8 @@ SPEC = AgentSpec(
         "script/craft/visual-style",
     ),
     max_steps=8,
+    sample_prompts=(
+        "给人物和道具都写一套能用来出图的提示词",
+        "看看还有谁缺物料提示词",
+    ),
 )

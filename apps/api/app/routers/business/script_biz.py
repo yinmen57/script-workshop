@@ -809,6 +809,50 @@ async def generate_segment_video_prompt(
     return data
 
 
+@router.get("/video-prompts/{prompt_id}")
+async def get_video_prompt(
+    prompt_id: str,
+    auth: AuthDep,
+    session: DbSession,
+) -> dict:
+    auth.require(APP_READ)
+    return await video_prompt_service.get_video_prompt(
+        session, auth.tenant_id, prompt_id
+    )
+
+
+@router.patch("/video-prompts/{prompt_id}")
+async def update_video_prompt(
+    prompt_id: str,
+    body: dict,
+    auth: AuthDep,
+    session: DbSession,
+    request_id: RequestIdDep,
+) -> dict:
+    auth.require(APP_WRITE)
+    data = await video_prompt_service.update_video_prompt_text(
+        session,
+        auth.tenant_id,
+        prompt_id,
+        prompt_text=str(body.get("prompt_text") or ""),
+        negative_prompt=(
+            None
+            if body.get("negative_prompt") is None
+            else str(body.get("negative_prompt") or "")
+        ),
+    )
+    await write_audit(
+        session,
+        tenant_id=auth.tenant_id,
+        actor=auth.actor,
+        action="script_biz.video_prompt.update",
+        request_id=request_id,
+        resource_type="video_prompt",
+        resource_id=prompt_id,
+    )
+    return data
+
+
 @router.post("/video-prompts/{prompt_id}/confirm")
 async def confirm_video_prompt(
     prompt_id: str,
@@ -1002,6 +1046,7 @@ async def list_project_jobs(
     auth: AuthDep,
     session: DbSession,
     status: str | None = None,
+    kind: str | None = None,
     limit: int = 50,
 ) -> dict:
     auth.require(APP_READ)
@@ -1010,6 +1055,7 @@ async def list_project_jobs(
         auth.tenant_id,
         project_id,
         status=status,
+        kind=kind,
         limit=limit,
     )
 
@@ -1043,6 +1089,50 @@ async def list_material_prompts(
     return await material_service.list_material_prompts(
         session, auth.tenant_id, project_id
     )
+
+
+@router.get("/material-prompts/{prompt_id}")
+async def get_material_prompt(
+    prompt_id: str,
+    auth: AuthDep,
+    session: DbSession,
+) -> dict:
+    auth.require(APP_READ)
+    return await material_service.get_material_prompt(
+        session, auth.tenant_id, prompt_id
+    )
+
+
+@router.patch("/material-prompts/{prompt_id}")
+async def update_material_prompt(
+    prompt_id: str,
+    body: dict,
+    auth: AuthDep,
+    session: DbSession,
+    request_id: RequestIdDep,
+) -> dict:
+    auth.require(APP_WRITE)
+    data = await material_service.update_material_prompt_text(
+        session,
+        auth.tenant_id,
+        prompt_id,
+        prompt_text=str(body.get("prompt_text") or ""),
+        negative_prompt=(
+            None
+            if body.get("negative_prompt") is None
+            else str(body.get("negative_prompt") or "")
+        ),
+    )
+    await write_audit(
+        session,
+        tenant_id=auth.tenant_id,
+        actor=auth.actor,
+        action="script_biz.material_prompt.update",
+        request_id=request_id,
+        resource_type="material_prompt",
+        resource_id=prompt_id,
+    )
+    return data
 
 
 @router.post("/projects/{project_id}/material-prompts/{prompt_id}/confirm")
@@ -1195,18 +1285,18 @@ async def list_video_jobs(
     )
 
 
-@router.get("/narrative-spaces/{space_id}/canvas")
-async def get_canvas(space_id: str, auth: AuthDep, session: DbSession) -> dict:
-    """读取叙事空间画布；无快照时按资产/分镜自动铺节点。"""
+@router.get("/video-segments/{segment_id}/canvas")
+async def get_canvas(segment_id: str, auth: AuthDep, session: DbSession) -> dict:
+    """读取视频片段画布；无快照时按本片段分镜/资产自动铺节点。"""
     auth.require(APP_READ)
     return await canvas_service.get_or_bootstrap(
-        session, auth.tenant_id, space_id
+        session, auth.tenant_id, segment_id
     )
 
 
-@router.put("/narrative-spaces/{space_id}/canvas")
+@router.put("/video-segments/{segment_id}/canvas")
 async def put_canvas(
-    space_id: str,
+    segment_id: str,
     body: dict,
     auth: AuthDep,
     session: DbSession,
@@ -1217,7 +1307,7 @@ async def put_canvas(
     data = await canvas_service.save_snapshot(
         session,
         auth.tenant_id,
-        space_id,
+        segment_id,
         nodes=body.get("nodes") or [],
         edges=body.get("edges") or [],
         viewport=body.get("viewport"),
@@ -1231,7 +1321,7 @@ async def put_canvas(
         resource_type="canvas_snapshot",
         resource_id=data.get("id"),
         payload={
-            "narrative_space_id": space_id,
+            "video_segment_id": segment_id,
             "version": data.get("version"),
         },
     )

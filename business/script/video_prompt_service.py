@@ -367,6 +367,78 @@ async def generate_for_segment(
     }
 
 
+async def get_video_prompt(
+    session: AsyncSession, tenant_id: str, prompt_id: str
+) -> dict:
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT * FROM video_prompt
+                WHERE id = :id AND tenant_id = :tenant_id
+                """
+            ),
+            {"id": prompt_id, "tenant_id": tenant_id},
+        )
+    ).mappings().first()
+    if row is None:
+        raise NotFoundError("video prompt not found")
+    return _prompt_public(dict(row))
+
+
+async def update_video_prompt_text(
+    session: AsyncSession,
+    tenant_id: str,
+    prompt_id: str,
+    *,
+    prompt_text: str,
+    negative_prompt: str | None = None,
+) -> dict:
+    """仅未定版提示词可改正文。"""
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT * FROM video_prompt
+                WHERE id = :id AND tenant_id = :tenant_id
+                """
+            ),
+            {"id": prompt_id, "tenant_id": tenant_id},
+        )
+    ).mappings().first()
+    if row is None:
+        raise NotFoundError("video prompt not found")
+    if (row.get("record_status") or "ai") == "confirmed":
+        raise ValidationAppError("已定版提示词不可修改，请先反悔")
+    text_value = (prompt_text or "").strip()
+    if not text_value:
+        raise ValidationAppError("prompt_text 不能为空")
+    neg = (
+        negative_prompt
+        if negative_prompt is not None
+        else (row.get("negative_prompt") or "")
+    )
+    await session.execute(
+        text(
+            """
+            UPDATE video_prompt
+            SET prompt_text = :prompt_text,
+                negative_prompt = :negative_prompt,
+                updated_at = CURRENT_TIMESTAMP(3)
+            WHERE id = :id AND tenant_id = :tenant_id
+            """
+        ),
+        {
+            "id": prompt_id,
+            "tenant_id": tenant_id,
+            "prompt_text": text_value,
+            "negative_prompt": neg,
+        },
+    )
+    await session.commit()
+    return await get_video_prompt(session, tenant_id, prompt_id)
+
+
 async def confirm_video_prompt(
     session: AsyncSession,
     tenant_id: str,

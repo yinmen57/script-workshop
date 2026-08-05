@@ -1,7 +1,8 @@
 /**
- * 右栏对话：SSE 真流式 + 思考/工具时间线 + 按项目持久化会话。
+ * 右栏对话：WebSocket 流式 + 思考/工具时间线 + 按项目持久化会话。
+ * 思考过程挂在助手气泡上方，默认折叠缩略。
  */
-import { Button, Input, Space, Typography, message } from "antd";
+import { Button, Collapse, Input, Space, Typography, message } from "antd";
 import { useEffect, useRef, useState } from "react";
 import {
   listChatMessages,
@@ -12,8 +13,15 @@ import type { WorkspaceSelection } from "./types";
 
 const SLUG = "script-workshop";
 
+type AssistantMsg = {
+  role: "assistant";
+  content: string;
+  reasoning?: string;
+};
+
 type ChatMsg =
-  | { role: "user" | "assistant"; content: string }
+  | { role: "user"; content: string }
+  | AssistantMsg
   | {
       role: "step";
       stepType: string;
@@ -43,8 +51,48 @@ function formatStepLine(step: AgentStep): string {
     const body = step.error || step.output || "";
     return `${head}${dur}${body ? ` · ${String(body).slice(0, 160)}` : ""}`;
   }
-  // thought 等
-  return String(step.output || "思考中…").slice(0, 240);
+  return String(step.output || "").slice(0, 240);
+}
+
+function reasoningLabel(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "思考过程";
+  const preview = oneLine.slice(0, 48);
+  return oneLine.length > 48
+    ? `思考过程 · ${preview}…`
+    : `思考过程 · ${preview}`;
+}
+
+/** 更新最近一条 assistant，避免 step 插在后面后 delta 画不上去 */
+function patchLastAssistant(prev: ChatMsg[], content: string): ChatMsg[] {
+  const next = [...prev];
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    if (next[i].role === "assistant") {
+      const cur = next[i] as AssistantMsg;
+      next[i] = { role: "assistant", content, reasoning: cur.reasoning };
+      return next;
+    }
+  }
+  next.push({ role: "assistant", content });
+  return next;
+}
+
+/** 把思考增量挂到最近一条助手气泡上 */
+function appendAssistantReasoning(prev: ChatMsg[], chunk: string): ChatMsg[] {
+  const next = [...prev];
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    if (next[i].role === "assistant") {
+      const cur = next[i] as AssistantMsg;
+      next[i] = {
+        role: "assistant",
+        content: cur.content,
+        reasoning: (cur.reasoning || "") + chunk,
+      };
+      return next;
+    }
+  }
+  next.push({ role: "assistant", content: "", reasoning: chunk });
+  return next;
 }
 
 export function WorkspaceChat({ projectId, selection, onStep }: Props) {
@@ -57,7 +105,6 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
   const assistantBuf = useRef("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // 切换项目：恢复本地 session，并拉历史
   useEffect(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -88,7 +135,6 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
       })
       .catch(() => {
         if (cancelled) return;
-        // 会话失效则清除本地引用
         localStorage.removeItem(sessionStorageKey(projectId));
         setSessionId(null);
       })
@@ -152,21 +198,18 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
           },
         },
         {
+          onReasoning: (t) => {
+            setMessages((prev) => appendAssistantReasoning(prev, t));
+          },
           onDelta: (t) => {
             assistantBuf.current += t;
             const buf = assistantBuf.current;
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last?.role === "assistant") {
-                next[next.length - 1] = { role: "assistant", content: buf };
-              }
-              return next;
-            });
+            setMessages((prev) => patchLastAssistant(prev, buf));
           },
           onStep: (step) => {
             onStep?.(step);
-            // thought 若与正在流式的 assistant 文本重复，仍保留时间线便于看见过程
+            // 思考已挂在助手气泡上，不再单独占一行
+            if (step.type === "reasoning") return;
             setMessages((prev) => [
               ...prev,
               {
@@ -185,30 +228,17 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
               sessionStorageKey(projectId),
               payload.session_id,
             );
-            // 若全程无 token delta，用最终 answer 填满空助手气泡
             if (!assistantBuf.current && payload.answer) {
               assistantBuf.current = payload.answer;
-              setMessages((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last?.role === "assistant") {
-                  next[next.length - 1] = {
-                    role: "assistant",
-                    content: payload.answer,
-                  };
-                }
-                return next;
-              });
+              setMessages((prev) =>
+                patchLastAssistant(prev, payload.answer),
+              );
             }
           },
           onError: (payload) => {
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: "assistant",
-                content: payload.message || "对话失败",
-              },
-            ]);
+            setMessages((prev) =>
+              patchLastAssistant(prev, payload.message || "对话失败"),
+            );
           },
         },
         abortRef.current.signal,
@@ -216,7 +246,7 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
     } catch (e) {
       if ((e as Error)?.name === "AbortError") return;
       const err = e instanceof Error ? e.message : "对话失败";
-      setMessages((prev) => [...prev, { role: "assistant", content: err }]);
+      setMessages((prev) => patchLastAssistant(prev, err));
     } finally {
       setStreaming(false);
       abortRef.current = null;
@@ -249,21 +279,22 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
           <Typography.Text type="secondary">正在恢复会话…</Typography.Text>
         ) : !messages.length ? (
           <Typography.Text type="secondary">
-            描述目标即可，例如「把第 1 集语义切分」或「为当前空间规划分镜」。过程中会流式显示思考与工具步骤；刷新后自动恢复本项目会话。
+            描述目标即可，例如「把第 1 集语义切分」。过程经 WebSocket
+            流式显示思考与工具步骤；刷新后自动恢复本项目会话。
           </Typography.Text>
         ) : (
           messages.map((m, i) => {
             if (m.role === "step") {
               const isTool =
                 m.stepType === "tool" || m.stepType === "tool_start";
+              const label = isTool ? "工具" : "步骤";
               return (
                 <div
                   key={`step-${i}`}
                   className="script-workspace__msg script-workspace__msg--step"
                 >
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    [{m.agentId || "?"}]{" "}
-                    {isTool ? "工具" : "思考"}
+                    [{m.agentId || "?"}] {label}
                     {m.toolId ? ` · ${m.toolId}` : ""}
                   </Typography.Text>
                   <div style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>
@@ -277,17 +308,43 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
                 </div>
               );
             }
+            if (m.role === "assistant") {
+              return (
+                <div
+                  key={`assistant-${i}`}
+                  className="script-workspace__msg script-workspace__msg--assistant"
+                >
+                  {m.reasoning ? (
+                    <Collapse
+                      ghost
+                      size="small"
+                      className="script-workspace__reasoning"
+                      items={[
+                        {
+                          key: "reasoning",
+                          label: reasoningLabel(m.reasoning),
+                          children: (
+                            <div className="script-workspace__reasoning-body">
+                              {m.reasoning}
+                            </div>
+                          ),
+                        },
+                      ]}
+                    />
+                  ) : null}
+                  <div className="script-workspace__assistant-body">
+                    {m.content ||
+                      (streaming ? (m.reasoning ? "等待回复…" : "…") : "")}
+                  </div>
+                </div>
+              );
+            }
             return (
               <div
-                key={`${m.role}-${i}`}
-                className={
-                  m.role === "user"
-                    ? "script-workspace__msg script-workspace__msg--user"
-                    : "script-workspace__msg script-workspace__msg--assistant"
-                }
+                key={`user-${i}`}
+                className="script-workspace__msg script-workspace__msg--user"
               >
-                {m.content ||
-                  (streaming && m.role === "assistant" ? "思考中…" : "")}
+                {m.content}
               </div>
             );
           })
@@ -302,7 +359,6 @@ export function WorkspaceChat({ projectId, selection, onStep }: Props) {
             placeholder={projectId ? "输入指令…" : "请先选择项目后再发送"}
             onChange={(e) => setInput(e.target.value)}
             onPressEnter={(e) => {
-              // 中文输入法组字中按 Enter 不发送
               if (e.nativeEvent.isComposing) return;
               void send();
             }}

@@ -28,6 +28,9 @@ export type WorkspaceAgent = {
   allowed_tools: string[];
   namespaces: string[];
   max_steps: number;
+  thinking?: boolean;
+  /** 调试台单测内置触发提示词 */
+  sample_prompts?: string[];
   source_path: string;
   prompts: Array<{
     prompt_key: string;

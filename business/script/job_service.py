@@ -119,7 +119,7 @@ def _recovery_fields(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def job_recovery_view(job: dict[str, Any]) -> dict[str, Any]:
-    """供 inspect / 选择 Agent 使用的任务恢复摘要。"""
+    """供 inspect / router 使用的任务恢复摘要。"""
     payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
     return {
         "id": job["id"],
@@ -165,48 +165,40 @@ async def list_jobs(
     project_id: str,
     *,
     status: str | None = None,
+    kind: str | None = None,
     limit: int = 50,
 ) -> dict:
     await project_service.require_project(session, tenant_id, project_id)
     limit = max(1, min(int(limit), 200))
+    clauses = [
+        "tenant_id = :tenant_id",
+        "project_id = :project_id",
+    ]
+    params: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "project_id": project_id,
+        "limit": limit,
+    }
     if status:
-        rows = (
-            await session.execute(
-                text(
-                    """
-                    SELECT * FROM job_run
-                    WHERE tenant_id = :tenant_id AND project_id = :project_id
-                      AND status = :status
-                    ORDER BY created_at DESC
-                    LIMIT :limit
-                    """
-                ),
-                {
-                    "tenant_id": tenant_id,
-                    "project_id": project_id,
-                    "status": status,
-                    "limit": limit,
-                },
-            )
-        ).mappings().all()
-    else:
-        rows = (
-            await session.execute(
-                text(
-                    """
-                    SELECT * FROM job_run
-                    WHERE tenant_id = :tenant_id AND project_id = :project_id
-                    ORDER BY created_at DESC
-                    LIMIT :limit
-                    """
-                ),
-                {
-                    "tenant_id": tenant_id,
-                    "project_id": project_id,
-                    "limit": limit,
-                },
-            )
-        ).mappings().all()
+        clauses.append("status = :status")
+        params["status"] = status
+    if kind:
+        clauses.append("kind = :kind")
+        params["kind"] = kind
+    where = " AND ".join(clauses)
+    rows = (
+        await session.execute(
+            text(
+                f"""
+                SELECT * FROM job_run
+                WHERE {where}
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        )
+    ).mappings().all()
     items = [_job_public(dict(r)) for r in rows]
     return {"items": items, "total": len(items)}
 

@@ -22,7 +22,7 @@
 | 视频挂在分镜上 | 用户拿到几秒碎片，仍需自行拼接 |
 | 画布无边界 | 数百个分镜落在单画布上无法导航 |
 
-结论：需要一个既是编辑单位、又是画布单位、又是检索单位的中间层——**叙事空间**。
+结论：需要一个既是语义编辑单位、又是检索单位的中间层——**叙事空间**；成片与画布则落在 **视频片段（≤15s）**。
 
 ## 2. 内容维度：五级模型
 
@@ -44,9 +44,9 @@ flowchart LR
 |------|------|----------|------|
 | 剧本 | `script_project` | 1 | 全剧唯一的风格圣经与人物 / 道具锚点归属层 |
 | 集 | `episode` | 每剧 N 集 | 交付批次、排期与验收单位 |
-| **叙事空间** | `narrative_space` | 每集 N 个 | 语义完整的一场戏；**画布单位 = 编辑单位 = 知识库单位**；长度不设限；切分规则见 2.1 |
+| **叙事空间** | `narrative_space` | 每集 N 个 | 语义完整的一场戏；**语义编辑单位 = 知识库单位**；长度不设限；切分规则见 2.1 |
 | 分镜 | `shot_plan` | 每叙事空间 N 个 | 镜头级描述：景别、动作、镜头语言，是视频提示词的输入素材 |
-| **视频片段** | `video_segment` | 每叙事空间 N 个 | 连续若干分镜的分组；**成片单位**，单段不超过模型上限；见 D1 |
+| **视频片段** | `video_segment` | 每叙事空间 N 个 | 连续若干分镜的分组；**成片单位 = 画布单位**，单段不超过模型上限（≤15s）；见 D1 / D2 |
 
 ### 2.1 叙事空间怎么切
 
@@ -160,12 +160,15 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 
 早期版本让叙事空间直接承担成片单位，导致 15 秒上限倒灌进语义切分，一集被切成十几个碎片。现在时长约束只作用在视频片段层。
 
-### D2 叙事空间是画布的唯一承载单位
+### D2 视频片段（≤15s）是画布的唯一承载单位
+
+叙事空间只负责语义切分与知识检索；画布挂在视频片段上，与成片一一对应。
 
 | 否决方案 | 原因 |
 |----------|------|
 | 一个剧本一个画布 | 数百分镜无法导航，跨集混杂 |
-| 一个分镜一个画布 | 人物 / 道具 / 物料复用关系跨画布，依赖不可见 |
+| 一个叙事空间一个画布 | 长空间可含多段成片，画布与生成单元错位 |
+| 一个分镜一个画布 | 过碎；人物 / 道具依赖被切散 |
 
 ### D3 两种模式共用工具，不写两套实现
 
@@ -227,7 +230,7 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 | `narrative_space` | id, episode_id, ordinal, title, summary, time_place, source_text, beat_type, mood, boundary_reason, segment_source, status, record_status | 已落地 |
 | `video_segment` | id, narrative_space_id, ordinal, title, shot_ids, source_text, duration_sec, status, record_status | 已落地 |
 | `shot_plan` | id, narrative_space_id, ordinal, beat, camera, … | 已落地 |
-| `canvas_snapshot` | id, narrative_space_id, nodes, edges, viewport, version | 已落地：API + 管理端画布 |
+| `canvas_snapshot` | id, video_segment_id, nodes, edges, viewport, version | 已落地：一片段一画布 |
 | `costume_change` / `bilingual_line` / `content_tag` | 见上节 | `costume_change` 表已建，抽取未做 |
 | `material_image` | prompt_id, oss_uri, provider, seed, status | 已落地 |
 | `video_prompt` | video_segment_id, narrative_space_id, prompt_text, ref_image_ids, duration_sec, status | 已落地 |
@@ -280,7 +283,7 @@ prop_key      = f"{owner_key or '_scene'}::{prop_type}::{normalize(prop_name)}"
 ## 9. 明确不做
 
 - 不做带货 / commerce / product 替换 / `content_type` 分派
-- 不做剧本级单画布或分镜级画布（D2）
+- 不做剧本级 / 叙事空间级 / 分镜级画布（D2：仅视频片段画布）
 - 不做分镜级成片视频（D1）
 - 不为画布单独实现一套编排（D3）
 - 不做画布内时间轴剪辑

@@ -74,6 +74,9 @@ class _RunSink:
     tool_trace: list[dict[str, Any]] = field(default_factory=list)
     # 是否已通过 callback 推送过 token delta（避免结束时整段重复）
     streamed_text: list[str] = field(default_factory=list)
+    # 工具报错后请求中止整图；由 runner_task.cancel() 跳出 ReAct
+    abort: dict[str, str] | None = None
+    runner_task: asyncio.Task | None = None
 
     def next_step_no(self) -> int:
         self.counter[0] += 1
@@ -82,6 +85,15 @@ class _RunSink:
     def mark_delta(self, text: str) -> None:
         if text:
             self.streamed_text.append(text)
+
+    def request_abort(self, tool_id: str, message: str) -> None:
+        """工具失败：只记录首个错误并取消执行任务。"""
+        if self.abort is not None:
+            return
+        self.abort = {"tool_id": str(tool_id), "message": str(message)}
+        task = self.runner_task
+        if task is not None and not task.done():
+            task.cancel()
 
 
 class _StepHandler(AsyncCallbackHandler):
@@ -102,65 +114,152 @@ class _StepHandler(AsyncCallbackHandler):
             {"_delta": True, "text": text, "agent_id": self.agent_id}
         )
 
+    async def _emit_reasoning(self, text: str) -> None:
+        """方舟 DeepSeek 等把思考写在 reasoning_content，单独推送。"""
+        if not text:
+            return
+        await self.sink.queue.put(
+            {"_reasoning": True, "text": text, "agent_id": self.agent_id}
+        )
+
+    @staticmethod
+    def _chunk_reasoning(chunk: Any) -> str:
+        """从 AIMessageChunk / dict 提取 reasoning_content。"""
+        extra = getattr(chunk, "additional_kwargs", None) or {}
+        if isinstance(extra, dict):
+            for key in ("reasoning_content", "reasoning"):
+                val = extra.get(key)
+                if isinstance(val, str) and val:
+                    return val
+        # 部分适配器挂在顶层属性
+        for key in ("reasoning_content", "reasoning"):
+            val = getattr(chunk, key, None)
+            if isinstance(val, str) and val:
+                return val
+        return ""
+
+    async def on_chat_model_start(
+        self, serialized: dict[str, Any], messages: list[Any], **kwargs: Any
+    ) -> None:
+        # 每轮 LLM 重置，避免上一轮的 chat stream 标记挡住后续 token
+        self._stream_via_chat = False
+
     async def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
-        """部分适配器走 llm_new_token；与 chat_model_stream 二选一防重复。"""
-        # chat_model_stream 优先：若同轮已有 chunk 回调则跳过（见 _stream_via_chat）
+        """ainvoke + streaming 时主路径：token 多为正文，reasoning 在 chunk.message。"""
         if getattr(self, "_stream_via_chat", False):
             return
+        gen_chunk = kwargs.get("chunk")
+        message = getattr(gen_chunk, "message", None) if gen_chunk is not None else None
+        if message is not None:
+            reasoning = self._chunk_reasoning(message)
+            if reasoning:
+                await self._emit_reasoning(reasoning)
+            content = _message_text(getattr(message, "content", None))
+            if content:
+                await self._emit_delta(content)
+                return
+        # 无 chunk 时退回纯 token
         await self._emit_delta(token)
 
     async def on_chat_model_stream(self, chunk: Any, **kwargs: Any) -> None:
-        """Chat 模型流式 chunk（优先路径）。"""
+        """部分调用栈走 chat_model_stream：正文 + reasoning。"""
         self._stream_via_chat = True
+        reasoning = self._chunk_reasoning(chunk)
+        if reasoning:
+            await self._emit_reasoning(reasoning)
         content = getattr(chunk, "content", None)
         if isinstance(content, str):
             await self._emit_delta(content)
         elif isinstance(content, list):
             await self._emit_delta(_message_text(content))
 
-    async def on_chat_model_end(self, response: LLMResult, **kwargs: Any) -> None:
-        usage = {}
-        if response.llm_output and isinstance(response.llm_output, dict):
-            raw = response.llm_output.get("token_usage") or response.llm_output.get(
-                "usage"
-            )
-            if isinstance(raw, dict):
+    async def on_chat_model_end(self, response: Any, **kwargs: Any) -> None:
+        """结束回调：兼容 LLMResult 与 AIMessage 两种形态。"""
+        usage: dict[str, Any] = {}
+        # 已流式推送正文时不再整段 thought，避免重复刷屏
+        if self.sink.streamed_text:
+            meta = getattr(response, "usage_metadata", None)
+            if isinstance(meta, dict):
                 usage = {
-                    "prompt_tokens": raw.get("prompt_tokens")
-                    or raw.get("input_tokens")
-                    or 0,
-                    "completion_tokens": raw.get("completion_tokens")
-                    or raw.get("output_tokens")
-                    or 0,
-                    "total_tokens": raw.get("total_tokens") or 0,
+                    "prompt_tokens": meta.get("input_tokens") or 0,
+                    "completion_tokens": meta.get("output_tokens") or 0,
+                    "total_tokens": meta.get("total_tokens") or 0,
                 }
-        # 新版 usage 也可能挂在 generation.message 上
-        for gen_list in response.generations or []:
-            for gen in gen_list:
-                msg = getattr(gen, "message", None)
-                meta = getattr(msg, "usage_metadata", None) if msg is not None else None
-                if isinstance(meta, dict):
+            elif isinstance(response, LLMResult) and response.llm_output:
+                raw = response.llm_output.get("token_usage") or response.llm_output.get(
+                    "usage"
+                )
+                if isinstance(raw, dict):
                     usage = {
-                        "prompt_tokens": meta.get("input_tokens") or 0,
-                        "completion_tokens": meta.get("output_tokens") or 0,
-                        "total_tokens": meta.get("total_tokens") or 0,
+                        "prompt_tokens": raw.get("prompt_tokens")
+                        or raw.get("input_tokens")
+                        or 0,
+                        "completion_tokens": raw.get("completion_tokens")
+                        or raw.get("output_tokens")
+                        or 0,
+                        "total_tokens": raw.get("total_tokens") or 0,
                     }
-                content = _message_text(getattr(msg, "content", None) if msg else None)
-                if not content:
-                    content = _message_text(getattr(gen, "text", None))
-                if content:
-                    await self.sink.queue.put(
-                        {
-                            "step_no": self.sink.next_step_no(),
-                            "agent_id": self.agent_id,
-                            "type": "thought",
-                            "tool_id": None,
-                            "args": None,
-                            "output": content,
-                            "duration_ms": None,
-                            "error": None,
+            _accumulate_usage(self.sink.usage, usage)
+            return
+
+        contents: list[str] = []
+        if isinstance(response, LLMResult):
+            if response.llm_output and isinstance(response.llm_output, dict):
+                raw = response.llm_output.get("token_usage") or response.llm_output.get(
+                    "usage"
+                )
+                if isinstance(raw, dict):
+                    usage = {
+                        "prompt_tokens": raw.get("prompt_tokens")
+                        or raw.get("input_tokens")
+                        or 0,
+                        "completion_tokens": raw.get("completion_tokens")
+                        or raw.get("output_tokens")
+                        or 0,
+                        "total_tokens": raw.get("total_tokens") or 0,
+                    }
+            for gen_list in response.generations or []:
+                for gen in gen_list:
+                    msg = getattr(gen, "message", None)
+                    meta = getattr(msg, "usage_metadata", None) if msg is not None else None
+                    if isinstance(meta, dict):
+                        usage = {
+                            "prompt_tokens": meta.get("input_tokens") or 0,
+                            "completion_tokens": meta.get("output_tokens") or 0,
+                            "total_tokens": meta.get("total_tokens") or 0,
                         }
+                    content = _message_text(
+                        getattr(msg, "content", None) if msg else None
                     )
+                    if not content:
+                        content = _message_text(getattr(gen, "text", None))
+                    if content:
+                        contents.append(content)
+        else:
+            meta = getattr(response, "usage_metadata", None)
+            if isinstance(meta, dict):
+                usage = {
+                    "prompt_tokens": meta.get("input_tokens") or 0,
+                    "completion_tokens": meta.get("output_tokens") or 0,
+                    "total_tokens": meta.get("total_tokens") or 0,
+                }
+            content = _message_text(getattr(response, "content", None))
+            if content:
+                contents.append(content)
+
+        for content in contents:
+            await self.sink.queue.put(
+                {
+                    "step_no": self.sink.next_step_no(),
+                    "agent_id": self.agent_id,
+                    "type": "thought",
+                    "tool_id": None,
+                    "args": None,
+                    "output": content,
+                    "duration_ms": None,
+                    "error": None,
+                }
+            )
         _accumulate_usage(self.sink.usage, usage)
 
     async def on_tool_start(
@@ -247,6 +346,9 @@ class _StepHandler(AsyncCallbackHandler):
                 "error": error,
             }
         )
+        # 工具报错立即跳出 ReAct，禁止继续空转 inspect / 重试
+        if error:
+            self.sink.request_abort(str(tool_id), error)
 
 
 def _build_handoff_tool(
@@ -276,13 +378,27 @@ def _build_handoff_tool(
         graph = create_react_agent(model, tools, prompt=prompt, name=agent_id)
         handler = _StepHandler(sink, agent_id)
         max_steps = int(specialist.get("max_steps") or 8)
-        result = await graph.ainvoke(
-            {"messages": [HumanMessage(content=task)]},
-            config={
-                "callbacks": [handler],
-                "recursion_limit": max(max_steps * 2, 8),
-            },
-        )
+        try:
+            result = await graph.ainvoke(
+                {"messages": [HumanMessage(content=task)]},
+                config={
+                    "callbacks": [handler],
+                    "recursion_limit": max(max_steps * 2, 8),
+                },
+            )
+        except asyncio.CancelledError:
+            # 子 Agent 工具失败触发的中止，向上抛出由外层收尾
+            raise
+        if sink.abort:
+            return json.dumps(
+                {
+                    "error": (
+                        f"工具 {sink.abort['tool_id']} 失败："
+                        f"{sink.abort['message']}"
+                    )
+                },
+                ensure_ascii=False,
+            )
         messages = result.get("messages") or []
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
@@ -312,9 +428,11 @@ def build_agent_graph(
     specialists: list[dict[str, Any]] | None,
     sink: _RunSink,
     tool_catalog: dict[str, dict[str, Any]] | None = None,
+    specialist_models: dict[str, Any] | None = None,
 ):
     """组装单个 Agent 的 LangGraph ReAct 图。"""
     catalog = tool_catalog or {}
+    models = specialist_models or {}
     tools = build_business_tools(
         tool_ids=list(agent.get("allowed_tools") or []),
         workspace_path=workspace_path,
@@ -324,12 +442,13 @@ def build_agent_graph(
     )
     if specialists:
         for spec in specialists:
+            sid = spec["agent_id"]
             tools.append(
                 _build_handoff_tool(
                     specialist=spec,
                     workspace_path=workspace_path,
                     tenant_id=tenant_id,
-                    model=model,
+                    model=models[sid],
                     sink=sink,
                     tool_catalog=catalog,
                 )
@@ -369,11 +488,24 @@ async def iter_agent_run(
 
     tool_catalog = dict(app.get("tool_catalog") or {})
     model_cfg = app.get("model") or {}
+    model_kwargs = {
+        "tenant_id": app["tenant_id"],
+        "primary": str(model_cfg.get("primary") or "default"),
+        "timeout_ms": model_cfg.get("timeout_ms"),
+    }
+    # 主 Agent 与各 specialist 按各自 thinking 建模型
     model = await build_chat_model(
-        tenant_id=app["tenant_id"],
-        primary=str(model_cfg.get("primary") or "default"),
-        timeout_ms=model_cfg.get("timeout_ms"),
+        **model_kwargs,
+        thinking=bool(entry.get("thinking")),
     )
+    specialist_models: dict[str, Any] = {}
+    if specialists:
+        for spec in specialists:
+            sid = spec["agent_id"]
+            specialist_models[sid] = await build_chat_model(
+                **model_kwargs,
+                thinking=bool(spec.get("thinking")),
+            )
     sink = _RunSink(queue=asyncio.Queue())
     graph = build_agent_graph(
         agent=entry,
@@ -383,6 +515,7 @@ async def iter_agent_run(
         specialists=specialists,
         sink=sink,
         tool_catalog=tool_catalog,
+        specialist_models=specialist_models,
     )
     steps = int(max_steps or entry.get("max_steps") or app.get("max_steps") or 8)
     lc_messages = _to_lc_messages(messages)
@@ -406,6 +539,7 @@ async def iter_agent_run(
             specialists=specialists,
             sink=sink,
             tool_catalog=tool_catalog,
+            specialist_models=specialist_models,
         )
 
     handler = _StepHandler(sink, entry["agent_id"])
@@ -420,12 +554,43 @@ async def iter_agent_run(
                     "recursion_limit": max(steps * 2, 16),
                 },
             )
+            # 子图已 abort 但尚未 cancel 到此处时，仍按中止收尾
+            if sink.abort:
+                msg = (
+                    f"已中止：工具 {sink.abort['tool_id']} 失败 — "
+                    f"{sink.abort['message']}"
+                )
+                await sink.queue.put(
+                    {
+                        "_done": True,
+                        "result": {"messages": [AIMessage(content=msg)]},
+                        "aborted": True,
+                    }
+                )
+                return
             await sink.queue.put({"_done": True, "result": result})
+        except asyncio.CancelledError:
+            if sink.abort:
+                msg = (
+                    f"已中止：工具 {sink.abort['tool_id']} 失败 — "
+                    f"{sink.abort['message']}"
+                )
+                await sink.queue.put(
+                    {
+                        "_done": True,
+                        "result": {"messages": [AIMessage(content=msg)]},
+                        "aborted": True,
+                    }
+                )
+                return
+            raise
         except Exception as exc:  # noqa: BLE001
             await sink.queue.put({"_error": exc})
 
     task = asyncio.create_task(_runner())
+    sink.runner_task = task
     answer = ""
+    aborted = False
     try:
         while True:
             item = await sink.queue.get()
@@ -433,6 +598,7 @@ async def iter_agent_run(
                 raise item["_error"]
             if item.get("_done"):
                 final_holder["result"] = item.get("result") or {}
+                aborted = bool(item.get("aborted") or sink.abort)
                 break
             yield item
     finally:
@@ -443,7 +609,10 @@ async def iter_agent_run(
             except asyncio.CancelledError:
                 pass
         else:
-            await task
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     messages_out = (final_holder.get("result") or {}).get("messages") or []
     for msg in reversed(messages_out):
@@ -452,6 +621,11 @@ async def iter_agent_run(
             if text:
                 answer = text
                 break
+    if aborted and sink.abort and not answer:
+        answer = (
+            f"已中止：工具 {sink.abort['tool_id']} 失败 — "
+            f"{sink.abort['message']}"
+        )
 
     yield {
         "_final": True,
@@ -460,4 +634,5 @@ async def iter_agent_run(
         "tool_trace": sink.tool_trace,
         "usage": sink.usage,
         "streamed": bool(sink.streamed_text),
+        "aborted": aborted,
     }

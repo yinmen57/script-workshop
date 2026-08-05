@@ -1,5 +1,6 @@
 /**
- * 叙事空间画布编辑器：ReactFlow 壳 + 自动保存 + 节点动作走 script-biz。
+ * 视频片段画布编辑器：ReactFlow 壳 + 自动保存 + 节点动作走 script-biz。
+ * 画布单位 = ≤15s 视频片段。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -23,13 +24,12 @@ import type { AgentStep } from "../../../api/chat";
 import {
   confirmScriptAsset,
   confirmShot,
-  confirmVideoPrompt,
   generateMaterialPrompts,
-  generateSpaceVideoPrompt,
+  generateSegmentVideoPrompt,
   getCanvas,
+  listMaterialPrompts,
   listVideoPrompts,
   planSpaceShots,
-  renderVideoPrompt,
   type CanvasSnapshot,
 } from "../../../api/business/scriptBiz";
 import { CanvasChatPanel } from "./CanvasChatPanel";
@@ -47,12 +47,12 @@ import "./theme/canvas.css";
 const edgeTypes = { canvas: CanvasEdge };
 
 type Props = {
-  spaceId: string;
+  segmentId: string;
   /** 嵌入工作台时填满父容器，隐藏返回与侧挂对话 */
   embedded?: boolean;
 };
 
-function EditorInner({ spaceId, embedded = false }: Props) {
+function EditorInner({ segmentId, embedded = false }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState<CanvasSnapshot | null>(null);
@@ -60,14 +60,15 @@ function EditorInner({ spaceId, embedded = false }: Props) {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const projectIdRef = useRef<string>("");
-  const spaceIdRef = useRef(spaceId);
-  spaceIdRef.current = spaceId;
+  const spaceIdRef = useRef<string>("");
+  const segmentIdRef = useRef(segmentId);
+  segmentIdRef.current = segmentId;
 
   const { saving, lastSavedAt, version, flush } = useCanvasAutoSave(
     nodes,
     edges,
     viewportRef,
-    { spaceId, enabled: !loading },
+    { segmentId, enabled: !loading },
   );
 
   const patchNode = useCallback(
@@ -107,7 +108,9 @@ function EditorInner({ spaceId, embedded = false }: Props) {
           return;
         }
         if (action === "plan_shots") {
-          const job = await planSpaceShots(spaceIdRef.current);
+          const spaceId = spaceIdRef.current;
+          if (!spaceId) throw new Error("缺少所属叙事空间");
+          const job = await planSpaceShots(spaceId);
           patchNode(nodeId, { status: "done" });
           message.success(
             `分镜规划完成（${(job.result as { total?: number })?.total ?? 0} 镜）`,
@@ -121,8 +124,10 @@ function EditorInner({ spaceId, embedded = false }: Props) {
           return;
         }
         if (action === "gen_video_prompt") {
-          await generateSpaceVideoPrompt(spaceIdRef.current);
-          const prompts = await listVideoPrompts(projectId, spaceIdRef.current);
+          await generateSegmentVideoPrompt(segmentIdRef.current);
+          const prompts = await listVideoPrompts(projectId, {
+            videoSegmentId: segmentIdRef.current,
+          });
           const latest = prompts.items[0];
           patchNode(nodeId, {
             status: "done",
@@ -130,35 +135,52 @@ function EditorInner({ spaceId, embedded = false }: Props) {
             record_status: latest?.record_status,
           });
           message.success("成片提示词已生成");
+          if (latest?.id) {
+            navigate(
+              `/script-biz/generate/video/${latest.id}?fromSegment=${segmentIdRef.current}`,
+            );
+          }
           return;
         }
-        if (action === "confirm_video_prompt") {
+        if (action === "open_video_confirm") {
           let promptId = data.video_prompt_id;
           if (!promptId) {
-            const prompts = await listVideoPrompts(projectId, spaceIdRef.current);
+            const prompts = await listVideoPrompts(projectId, {
+              videoSegmentId: segmentIdRef.current,
+            });
             promptId = prompts.items[0]?.id;
           }
-          if (!promptId) throw new Error("尚无成片提示词");
-          await confirmVideoPrompt(promptId);
+          if (!promptId) {
+            patchNode(nodeId, { status: "idle" });
+            message.warning("请先生成成片提示词");
+            return;
+          }
           patchNode(nodeId, {
-            status: "done",
-            record_status: "confirmed",
+            status: "idle",
             video_prompt_id: promptId,
           });
-          message.success("成片提示词已确认");
+          navigate(
+            `/script-biz/generate/video/${promptId}?fromSegment=${segmentIdRef.current}`,
+          );
           return;
         }
-        if (action === "render_video") {
-          let promptId = data.video_prompt_id;
-          if (!promptId) {
-            const prompts = await listVideoPrompts(projectId, spaceIdRef.current);
-            promptId = prompts.items.find((p) => p.record_status === "confirmed")
-              ?.id;
+        if (action === "open_material_confirm") {
+          const targetType = data.kind === "prop" ? "prop" : "character";
+          const targetId = data.entity_id;
+          if (!targetId) throw new Error("缺少资产 id");
+          const prompts = await listMaterialPrompts(projectId);
+          const hit = prompts.items.find(
+            (p) => p.target_type === targetType && p.target_id === targetId,
+          );
+          if (!hit) {
+            patchNode(nodeId, { status: "idle" });
+            message.warning("请先生成物料提示词");
+            return;
           }
-          if (!promptId) throw new Error("请先生成并确认成片提示词");
-          await renderVideoPrompt(promptId);
-          patchNode(nodeId, { status: "done" });
-          message.success("成片视频已生成");
+          patchNode(nodeId, { status: "idle" });
+          navigate(
+            `/script-biz/generate/image/${hit.id}?fromSegment=${segmentIdRef.current}`,
+          );
           return;
         }
         patchNode(nodeId, { status: "idle" });
@@ -168,7 +190,7 @@ function EditorInner({ spaceId, embedded = false }: Props) {
         message.error(err);
       }
     },
-    [patchNode],
+    [navigate, patchNode],
   );
 
   const actionRef = useRef(handleAction);
@@ -192,7 +214,7 @@ function EditorInner({ spaceId, embedded = false }: Props) {
       setNodes((prev) =>
         withActions(
           applyAgentStepToNodes(prev, step, {
-            spaceId: spaceIdRef.current,
+            segmentId: segmentIdRef.current,
             projectId: projectIdRef.current,
           }),
         ),
@@ -201,13 +223,12 @@ function EditorInner({ spaceId, embedded = false }: Props) {
     [setNodes, withActions],
   );
 
-  // 调试台同浏览器页发出的 step 也可同步到本画布
   useEffect(() => {
     const bc = new BroadcastChannel(CANVAS_STEP_CHANNEL);
     bc.onmessage = (ev: MessageEvent<CanvasStepMessage>) => {
       const msg = ev.data;
       if (!msg?.step) return;
-      if (msg.spaceId && msg.spaceId !== spaceIdRef.current) return;
+      if (msg.segmentId && msg.segmentId !== segmentIdRef.current) return;
       applyStep(msg.step);
     };
     return () => bc.close();
@@ -218,10 +239,12 @@ function EditorInner({ spaceId, embedded = false }: Props) {
     (async () => {
       setLoading(true);
       try {
-        const snap = await getCanvas(spaceId);
+        const snap = await getCanvas(segmentId);
         if (cancelled) return;
         setMeta(snap);
         projectIdRef.current = snap.project_id || "";
+        spaceIdRef.current =
+          snap.narrative_space_id || snap.segment?.narrative_space_id || "";
         setNodes(withActions((snap.nodes as Node[]) || []));
         setEdges(
           ((snap.edges as Edge[]) || []).map((e) => ({
@@ -241,7 +264,17 @@ function EditorInner({ spaceId, embedded = false }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [spaceId, setNodes, setEdges, withActions]);
+  }, [segmentId, setNodes, setEdges, withActions]);
+
+  const title =
+    meta?.segment?.title ||
+    (meta?.segment?.ordinal != null
+      ? `片段 ${meta.segment.ordinal}`
+      : "视频片段画布");
+  const duration =
+    meta?.segment?.duration_sec != null
+      ? ` · ${meta.segment.duration_sec.toFixed(1)}s`
+      : "";
 
   return (
     <div
@@ -300,7 +333,8 @@ function EditorInner({ spaceId, embedded = false }: Props) {
               </Button>
             )}
             <Typography.Text>
-              {meta?.space?.title || "叙事空间画布"}
+              {title}
+              {duration}
             </Typography.Text>
             <Typography.Text type="secondary">
               {saving
@@ -317,7 +351,8 @@ function EditorInner({ spaceId, embedded = false }: Props) {
         {embedded ? null : (
           <Panel position="top-right">
             <CanvasChatPanel
-              spaceId={spaceId}
+              segmentId={segmentId}
+              narrativeSpaceId={meta?.narrative_space_id}
               projectId={meta?.project_id}
               onStep={applyStep}
             />

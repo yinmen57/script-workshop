@@ -38,7 +38,7 @@ _CONFIRM_TYPES = frozenset(
 )
 
 
-async def _submit_and_wait(
+async def _submit_only(
     *,
     project_id: str,
     kind: str,
@@ -46,8 +46,8 @@ async def _submit_and_wait(
     label: str,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """只投递作业并立即返回，不阻塞等待终态（生图/生视频用）。"""
     tenant_id = require_tenant_id()
-    # 同 dedupe_key 活动任务由 submit_job 去重并返回，此处直接等待终态
     async with get_session_factory()() as session:
         job = await job_service.submit_job(
             session,
@@ -58,27 +58,46 @@ async def _submit_and_wait(
             label=label,
             payload=payload or {},
         )
-    if job.get("deduped"):
-        finished = await job_service.wait_until_terminal(
-            tenant_id=tenant_id,
-            job_id=job["id"],
-        )
-        return {
-            "job_id": finished["id"],
-            "status": finished["status"],
-            "result": finished.get("result") or {},
-            "deduped": True,
-            "recovery": job_service.job_recovery_view(finished),
-        }
+    return {
+        "job_id": job["id"],
+        "status": job["status"],
+        "result": job.get("result") or {},
+        "deduped": bool(job.get("deduped")),
+        "recovery": job_service.job_recovery_view(job),
+        "queued": job["status"] in ("queued", "running"),
+        "message": (
+            "已加入任务队列，可用 list-jobs 查询进度"
+            if job["status"] in ("queued", "running")
+            else f"任务状态：{job['status']}"
+        ),
+    }
+
+
+async def _submit_and_wait(
+    *,
+    project_id: str,
+    kind: str,
+    dedupe_key: str,
+    label: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    tenant_id = require_tenant_id()
+    submitted = await _submit_only(
+        project_id=project_id,
+        kind=kind,
+        dedupe_key=dedupe_key,
+        label=label,
+        payload=payload,
+    )
     finished = await job_service.wait_until_terminal(
         tenant_id=tenant_id,
-        job_id=job["id"],
+        job_id=submitted["job_id"],
     )
     return {
         "job_id": finished["id"],
         "status": finished["status"],
         "result": finished.get("result") or {},
-        "deduped": False,
+        "deduped": submitted.get("deduped"),
         "recovery": job_service.job_recovery_view(finished),
     }
 
@@ -316,13 +335,13 @@ async def generate_video_prompts(
 
 
 async def render_material_image(material_prompt_id: str) -> dict[str, Any]:
-    """通过赏舞为已确认物料提示词生图。"""
+    """为已确认物料提示词生图：只入队，不等待完成。"""
     tenant_id = require_tenant_id()
     async with get_session_factory()() as session:
         project_id = await precondition_service.assert_can_render_material_image(
             session, tenant_id, material_prompt_id
         )
-    return await _submit_and_wait(
+    return await _submit_only(
         project_id=project_id,
         kind=job_service.KIND_RENDER_IMAGE,
         dedupe_key=f"render_image:{material_prompt_id}",
@@ -332,19 +351,46 @@ async def render_material_image(material_prompt_id: str) -> dict[str, Any]:
 
 
 async def render_video(video_prompt_id: str) -> dict[str, Any]:
-    """通过赏舞为已确认成片提示词生成视频。"""
+    """为已确认成片提示词生成视频：只入队，不等待完成。"""
     tenant_id = require_tenant_id()
     async with get_session_factory()() as session:
         project_id = await precondition_service.assert_can_render_video(
             session, tenant_id, video_prompt_id
         )
-    return await _submit_and_wait(
+    return await _submit_only(
         project_id=project_id,
         kind=job_service.KIND_RENDER_VIDEO,
         dedupe_key=f"render_video:{video_prompt_id}",
         label="生成成片视频",
         payload={"video_prompt_id": video_prompt_id},
     )
+
+
+async def list_jobs(
+    project_id: str,
+    status: str | None = None,
+    kind: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """查询项目任务队列（生图/生视频与其它 job）。"""
+    tenant_id = require_tenant_id()
+    async with get_session_factory()() as session:
+        data = await job_service.list_jobs(
+            session,
+            tenant_id,
+            project_id,
+            status=(status or "").strip() or None,
+            kind=(kind or "").strip() or None,
+            limit=limit,
+        )
+    items = [job_service.job_recovery_view(j) for j in data.get("items") or []]
+    active = sum(1 for j in items if j.get("status") in ("queued", "running"))
+    return {
+        "items": items,
+        "total": len(items),
+        "active_count": active,
+        "message": f"共 {len(items)} 条，进行中 {active} 条",
+    }
 
 
 async def confirm(

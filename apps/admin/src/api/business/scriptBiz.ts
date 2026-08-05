@@ -33,6 +33,7 @@ export type PropAsset = {
 
 export type MaterialPrompt = {
   id: string;
+  project_id: string;
   target_type: string;
   target_id: string;
   prompt_text: string;
@@ -134,12 +135,17 @@ export async function getJob(jobId: string) {
 
 export async function listProjectJobs(
   projectId: string,
-  params?: { status?: string; limit?: number },
+  params?: { status?: string; kind?: string; limit?: number },
 ) {
   const { data } = await api.get<{ items: JobRun[]; total: number }>(
     `/script-biz/projects/${projectId}/jobs`,
     { params },
   );
+  return data;
+}
+
+export async function cancelJob(jobId: string) {
+  const { data } = await api.post<JobRun>(`/script-biz/jobs/${jobId}/cancel`);
   return data;
 }
 
@@ -426,11 +432,14 @@ export async function confirmVideoSegment(segmentId: string) {
 
 export async function listVideoPrompts(
   projectId: string,
-  narrativeSpaceId?: string,
+  opts?: { narrativeSpaceId?: string; videoSegmentId?: string },
 ) {
+  const params: Record<string, string> = {};
+  if (opts?.narrativeSpaceId) params.narrative_space_id = opts.narrativeSpaceId;
+  if (opts?.videoSegmentId) params.video_segment_id = opts.videoSegmentId;
   const { data } = await api.get<{ items: VideoPrompt[]; total: number }>(
     `/script-biz/projects/${projectId}/video-prompts`,
-    { params: narrativeSpaceId ? { narrative_space_id: narrativeSpaceId } : {} },
+    { params },
   );
   return data;
 }
@@ -454,6 +463,24 @@ export async function generateSegmentVideoPrompt(segmentId: string) {
     `/script-biz/video-segments/${segmentId}/video-prompts/generate`,
   );
   return waitJob(data.id);
+}
+
+export async function getVideoPrompt(promptId: string) {
+  const { data } = await api.get<VideoPrompt>(
+    `/script-biz/video-prompts/${promptId}`,
+  );
+  return data;
+}
+
+export async function updateVideoPrompt(
+  promptId: string,
+  body: { prompt_text: string; negative_prompt?: string },
+) {
+  const { data } = await api.patch<VideoPrompt>(
+    `/script-biz/video-prompts/${promptId}`,
+    body,
+  );
+  return data;
 }
 
 export async function confirmVideoPrompt(promptId: string) {
@@ -524,6 +551,24 @@ export async function listMaterialPrompts(projectId: string) {
   return data;
 }
 
+export async function getMaterialPrompt(promptId: string) {
+  const { data } = await api.get<MaterialPrompt>(
+    `/script-biz/material-prompts/${promptId}`,
+  );
+  return data;
+}
+
+export async function updateMaterialPrompt(
+  promptId: string,
+  body: { prompt_text: string; negative_prompt?: string },
+) {
+  const { data } = await api.patch<MaterialPrompt>(
+    `/script-biz/material-prompts/${promptId}`,
+    body,
+  );
+  return data;
+}
+
 export async function confirmMaterialPrompt(projectId: string, promptId: string) {
   const { data } = await api.post<MaterialPrompt>(
     `/script-biz/projects/${projectId}/material-prompts/${promptId}/confirm`,
@@ -544,18 +589,29 @@ export type VideoJob = {
   duration_sec?: number | null;
 };
 
-export async function renderMaterialImage(promptId: string) {
+/** 入队后立即返回，不等待生成完成（确认画布用）。 */
+export async function enqueueMaterialImage(promptId: string) {
   const { data } = await api.post<JobRun>(
     `/script-biz/material-prompts/${promptId}/render`,
   );
-  return waitJob(data.id, { timeoutMs: 360000 });
+  return data;
 }
 
-export async function renderVideoPrompt(promptId: string) {
+export async function enqueueVideoRender(promptId: string) {
   const { data } = await api.post<JobRun>(
     `/script-biz/video-prompts/${promptId}/render`,
   );
-  return waitJob(data.id, { timeoutMs: 720000 });
+  return data;
+}
+
+export async function renderMaterialImage(promptId: string) {
+  const job = await enqueueMaterialImage(promptId);
+  return waitJob(job.id, { timeoutMs: 360000 });
+}
+
+export async function renderVideoPrompt(promptId: string) {
+  const job = await enqueueVideoRender(promptId);
+  return waitJob(job.id, { timeoutMs: 720000 });
 }
 
 export async function listVideoJobs(
@@ -579,25 +635,32 @@ export async function getSdBalance() {
 
 export type CanvasSnapshot = {
   id: string;
-  narrative_space_id: string;
+  video_segment_id: string;
+  narrative_space_id?: string;
   project_id?: string;
   nodes: unknown[];
   edges: unknown[];
   viewport?: { x: number; y: number; zoom: number } | null;
   version: number;
   bootstrapped?: boolean;
-  space?: { id: string; title?: string; time_place?: string };
+  segment?: {
+    id: string;
+    title?: string;
+    ordinal?: number;
+    duration_sec?: number | null;
+    narrative_space_id?: string;
+  };
 };
 
-export async function getCanvas(spaceId: string) {
+export async function getCanvas(segmentId: string) {
   const { data } = await api.get<CanvasSnapshot>(
-    `/script-biz/narrative-spaces/${spaceId}/canvas`,
+    `/script-biz/video-segments/${segmentId}/canvas`,
   );
   return data;
 }
 
 export async function saveCanvas(
-  spaceId: string,
+  segmentId: string,
   body: {
     nodes: unknown[];
     edges: unknown[];
@@ -605,7 +668,7 @@ export async function saveCanvas(
   },
 ) {
   const { data } = await api.put<CanvasSnapshot>(
-    `/script-biz/narrative-spaces/${spaceId}/canvas`,
+    `/script-biz/video-segments/${segmentId}/canvas`,
     body,
   );
   return data;

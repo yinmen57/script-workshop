@@ -40,12 +40,17 @@ class OpenAICompatibleChatAdapter:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        *,
+        thinking: bool = False,
     ) -> dict[str, Any]:
         url = f"{self.base_url}/chat/completions"
+        # 方舟 DeepSeek：业务 JSON 任务默认关思考，保证 content 稳定落盘
+        thinking_type = "enabled" if thinking else "disabled"
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,
             "stream": False,
+            "thinking": {"type": thinking_type},
         }
         if tools:
             payload["tools"] = tools

@@ -36,6 +36,9 @@ export function AgentWorkspacePage() {
           </Button>
         ) : null}
       </Space>
+      <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+        Agent 单测在调试台进行：可选择真实项目/叙事空间/视频片段作为测试上下文，也可保存为命名夹具复用。
+      </Typography.Paragraph>
       <Typography.Title level={3}>{data.name}</Typography.Title>
       <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="目录">{data.workspace_path}</Descriptions.Item>
@@ -169,6 +172,9 @@ export function AgentWorkspacePage() {
                         单独调试
                       </Button>
                     ) : null}
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      调试台可配置测试上下文与夹具
+                    </Typography.Text>
                   </Space>
                   <Descriptions size="small" column={2} bordered style={{ marginBottom: 12 }}>
                     <Descriptions.Item label="系统提示词">
@@ -186,6 +192,15 @@ export function AgentWorkspacePage() {
                             <Tag color="blue" key={ns}>
                               {ns}
                             </Tag>
+                          ))
+                        : "-"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="单测提示词" span={2}>
+                      {(agent.sample_prompts || []).length
+                        ? agent.sample_prompts!.map((p) => (
+                            <div key={p} style={{ marginBottom: 4 }}>
+                              <Tag>{p}</Tag>
+                            </div>
                           ))
                         : "-"}
                     </Descriptions.Item>

@@ -106,6 +106,7 @@ services:
     volumes:
       - ./framework:/app/framework:ro
       - ./business:/app/business:ro
+      - ./apps/api:/app/apps/api:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:
@@ -159,6 +160,7 @@ services:
     volumes:
       - ./framework:/app/framework:ro
       - ./business:/app/business:ro
+      - ./apps/api:/app/apps/api:ro
       - ./alembic:/app/alembic:ro
     depends_on:
       mysql:

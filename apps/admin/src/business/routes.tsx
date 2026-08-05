@@ -21,6 +21,20 @@ const ModelsPage = lazy(() =>
   })),
 );
 
+const JobsPage = lazy(() =>
+  import("../pages/business/jobs/JobsPage").then((m) => ({
+    default: m.JobsPage,
+  })),
+);
+
+const GenerationConfirmCanvasPage = lazy(() =>
+  import("../pages/business/script-canvas/GenerationConfirmCanvasPage").then(
+    (m) => ({
+      default: m.GenerationConfirmCanvasPage,
+    }),
+  ),
+);
+
 function FullscreenSuspense({ children }: { children: ReactNode }) {
   return (
     <Suspense
@@ -45,10 +59,18 @@ function FullscreenSuspense({ children }: { children: ReactNode }) {
 export const businessFullscreenRoutes = (
   <>
     <Route
-      path="/script-biz/canvas/:spaceId"
+      path="/script-biz/canvas/:segmentId"
       element={
         <FullscreenSuspense>
           <ScriptCanvasPage />
+        </FullscreenSuspense>
+      }
+    />
+    <Route
+      path="/script-biz/generate/:kind/:promptId"
+      element={
+        <FullscreenSuspense>
+          <GenerationConfirmCanvasPage />
         </FullscreenSuspense>
       }
     />
@@ -66,6 +88,14 @@ export const businessFullscreenRoutes = (
 /** 套在 AdminLayout 内的业务页 */
 export const businessLayoutRoutes = (
   <>
+    <Route
+      path="/jobs"
+      element={
+        <Suspense fallback={<Spin />}>
+          <JobsPage />
+        </Suspense>
+      }
+    />
     <Route
       path="/models"
       element={

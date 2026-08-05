@@ -119,14 +119,14 @@ async def delete_project(
     project = await require_project(session, tenant_id, project_id)
     params = {"project_id": project_id, "tenant_id": tenant_id}
 
-    # 画布挂在叙事空间上，先按空间清
+    # 画布挂在视频片段上，先按片段清
     await session.execute(
         text(
             """
             DELETE FROM canvas_snapshot
             WHERE tenant_id = :tenant_id
-              AND narrative_space_id IN (
-                SELECT id FROM narrative_space
+              AND video_segment_id IN (
+                SELECT id FROM video_segment
                 WHERE project_id = :project_id AND tenant_id = :tenant_id
               )
             """

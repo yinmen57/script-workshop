@@ -1,4 +1,4 @@
-"""只读巡检：给 tool-selector / 专业 Agent 提供决策所需的状态摘要。
+"""只读巡检：给 router / 专业 Agent 提供决策所需的状态摘要。
 
 不返回 source_text 等大字段；结果带 inspected_at，便于发现过期计划。
 """
@@ -25,7 +25,17 @@ from business.script import (
 from framework.domain.errors import ValidationAppError
 
 SCOPES = frozenset(
-    {"structure", "assets", "shots", "segments", "materials", "jobs", "progress"}
+    {
+        "structure",
+        "assets",
+        "shots",
+        "segments",
+        "materials",
+        "jobs",
+        "progress",
+        # 单个叙事空间详情（Agent 语义切分前常用）
+        "narrative_space",
+    }
 )
 
 
@@ -95,6 +105,14 @@ async def inspect(
         data = await _inspect_jobs(
             session, tenant_id, project_id, status=job_status, limit=limit
         )
+    elif scope == "narrative_space":
+        data = await _inspect_narrative_space(
+            session,
+            tenant_id,
+            project_id,
+            narrative_space_id=narrative_space_id,
+            limit=limit,
+        )
     else:
         data = await _inspect_progress(session, tenant_id, project_id)
 
@@ -105,6 +123,68 @@ async def inspect(
         "has_style_bible": bool(project.get("style_bible")),
         "inspected_at": _now_iso(),
         **data,
+    }
+
+
+async def _inspect_narrative_space(
+    session: AsyncSession,
+    tenant_id: str,
+    project_id: str,
+    *,
+    narrative_space_id: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    """单个叙事空间摘要：元数据 + 分镜/视频片段计数（不含 source_text）。"""
+    if not narrative_space_id:
+        raise ValidationAppError(
+            "scope=narrative_space 时必须提供 narrative_space_id",
+            details={"code": "INSPECT_SPACE_ID_REQUIRED"},
+        )
+    space = await structure_service._require_space(
+        session, tenant_id, narrative_space_id
+    )
+    if space.get("project_id") != project_id:
+        raise ValidationAppError(
+            "叙事空间不属于该项目",
+            details={
+                "code": "SPACE_PROJECT_MISMATCH",
+                "target": {"type": "narrative_space", "id": narrative_space_id},
+            },
+        )
+    shots = await _inspect_shots(
+        session,
+        tenant_id,
+        project_id,
+        narrative_space_id=narrative_space_id,
+        limit=limit,
+    )
+    segments = await _inspect_segments(
+        session,
+        tenant_id,
+        project_id,
+        narrative_space_id=narrative_space_id,
+        video_segment_id=None,
+        limit=limit,
+    )
+    return {
+        "narrative_space": {
+            "id": space["id"],
+            "episode_id": space.get("episode_id"),
+            "ordinal": space.get("ordinal"),
+            "title": space.get("title") or "",
+            "summary": (space.get("summary") or "")[:240],
+            "time_place": space.get("time_place") or "",
+            "beat_type": space.get("beat_type") or "",
+            "mood": space.get("mood") or "",
+            "segment_source": space.get("segment_source") or "",
+            "status": space.get("status"),
+            "record_status": space.get("record_status"),
+            "estimated_duration_sec": space.get("estimated_duration_sec"),
+        },
+        "shots_summary": shots.get("summary"),
+        "segments_summary": segments.get("summary"),
+        "shots": shots.get("items") or [],
+        "segments": segments.get("items") or [],
     }
 
 
@@ -430,7 +510,7 @@ async def _inspect_jobs(
 async def _inspect_progress(
     session: AsyncSession, tenant_id: str, project_id: str
 ) -> dict[str, Any]:
-    """一页总览：链路各阶段是否就绪，供选择 Agent 快速决策。"""
+    """一页总览：链路各阶段是否就绪，供 router 快速决策。"""
     project = await project_service.require_project(session, tenant_id, project_id)
     doc = await project_service.latest_document(session, tenant_id, project_id)
     structure = await _inspect_structure(
@@ -535,7 +615,7 @@ async def _inspect_progress(
         },
         "active_jobs": active_jobs,
         "suggested_next_tools": next_hints,
-        # 保留少量明细供选择 Agent 定位
+        # 保留少量明细供 router 定位
         "sample_shots_present": shots["summary"]["total"] > 0,
         "sample_segments_present": segments["summary"]["total"] > 0,
     }

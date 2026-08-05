@@ -18,6 +18,10 @@ class AgentSpec:
     namespaces: tuple[str, ...] = ()
     max_steps: int = 8
     system_prompt_file: str = "system.md"
+    # 方舟 DeepSeek 等：是否开启深度思考（thinking.type）
+    thinking: bool = False
+    # 调试台单测内置触发提示词
+    sample_prompts: tuple[str, ...] = ()
 
     @property
     def prompts_root(self) -> Path:
@@ -74,6 +78,8 @@ class AgentSpec:
             "allowed_tools": list(self.tools),
             "namespaces": list(self.namespaces),
             "max_steps": self.max_steps,
+            "thinking": self.thinking,
+            "sample_prompts": list(self.sample_prompts),
             "prompts": self.prompt_files(),
             "source_path": self.source_path,
         }

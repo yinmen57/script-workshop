@@ -3,7 +3,8 @@
 TOOL_META: dict[str, tuple[str, str]] = {
     "inspect": (
         "inspect",
-        "只读巡检项目进度与产物状态；模糊目标时先查 scope=progress。",
+        "只读巡检。scope 仅允许：progress / structure / assets / shots / segments / materials / jobs / narrative_space。"
+        "模糊目标先 progress；查单个叙事空间用 narrative_space + narrative_space_id。",
     ),
     "parse-script": (
         "parse_script",
@@ -39,11 +40,15 @@ TOOL_META: dict[str, tuple[str, str]] = {
     ),
     "render-material-image": (
         "render_material_image",
-        "为已确认物料提示词生图（赏舞，产生费用）。",
+        "为已确认物料提示词生图：只加入任务队列并立即返回 job_id，不等待完成（产生费用）。",
     ),
     "render-video": (
         "render_video",
-        "为已确认成片提示词生成视频（赏舞，产生费用）。",
+        "为已确认成片提示词生成视频：只加入任务队列并立即返回 job_id，不等待完成（产生费用）。",
+    ),
+    "list-jobs": (
+        "list_jobs",
+        "查询项目任务队列进度；可按 status / kind 筛选。生图生视频入队后用此工具查看。",
     ),
     "confirm": (
         "confirm",

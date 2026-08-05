@@ -397,6 +397,16 @@ async def _drive_agent(
                 },
             }
             continue
+        if ev.get("_reasoning"):
+            yield {
+                "event": "reasoning",
+                "data": {
+                    "text": ev.get("text") or "",
+                    "request_id": request_id,
+                    "agent_id": ev.get("agent_id"),
+                },
+            }
+            continue
         await agent_run_service.append_step(
             session, run_id=prepared["run_id"], step=ev
         )
@@ -506,7 +516,8 @@ async def complete_stream(
             raise RuntimeError("agent run produced no final result")
         answer = final.get("answer") or ""
         usage = final.get("usage") or usage
-        # 已 token 流式推送则不再整段重复；未流式时兜底一次 delta
+        aborted = bool(final.get("aborted"))
+        # 已 token 流式推送则不再整段重复；未流式时补一次 delta
         if answer and not final.get("streamed"):
             yield {
                 "event": "delta",
@@ -525,8 +536,9 @@ async def complete_stream(
         await agent_run_service.finish_run(
             session,
             run_id=prepared["run_id"],
-            status="succeeded",
+            status="failed" if aborted else "succeeded",
             answer=answer,
+            error_message=answer if aborted else None,
             usage=usage,
             latency_ms=latency_ms,
         )
@@ -537,10 +549,12 @@ async def complete_stream(
             slug=app["slug"],
             session_id=prepared["session_id"],
             model_id=app["model"].get("primary") or "default",
-            status="success",
+            status="error" if aborted else "success",
             latency_ms=latency_ms,
             usage=usage,
             tool_trace=final.get("tool_trace") or [],
+            error_code="TOOL_ABORTED" if aborted else None,
+            detail={"error": answer} if aborted else None,
         )
         yield {
             "event": "done",
@@ -549,6 +563,7 @@ async def complete_stream(
                 "run_id": prepared["run_id"],
                 "session_id": prepared["session_id"],
                 "answer": answer,
+                "aborted": aborted,
             },
         }
     except Exception as exc:  # noqa: BLE001

@@ -139,7 +139,7 @@ docker exec -w /app ai-api alembic upgrade head
 
 **验收**：单叙事空间画布可拖拽持久化；节点生成与对话工具为同一函数。
 
-入口：工坊叙事空间行「画布」→ `/script-biz/canvas/:spaceId`。
+入口：工坊视频片段行 → 中栏画布，或 `/script-biz/canvas/:segmentId`。
 
 ### 第六段 · 语义切分与片段层
 

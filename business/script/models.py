@@ -221,10 +221,10 @@ class NarrativeSpace(Base):
 
 
 class VideoSegment(Base):
-    """视频片段：叙事空间内的成片生成单元，单段不超过模型上限（15 秒）。
+    """视频片段：叙事空间内的成片与画布单元，单段不超过模型上限（15 秒）。
 
     由该空间连续若干分镜聚合而成，边界由 LLM 按分镜内容判定（能否一次连贯拍完），
-    是 video_prompt / video_job 的挂载层。
+    是 video_prompt / video_job / canvas_snapshot 的挂载层。
     """
 
     __tablename__ = "video_segment"
@@ -403,15 +403,17 @@ class RecordRevision(Base):
 
 
 class CanvasSnapshot(Base):
+    """画布快照：挂视频片段（≤15s），一片段一画布。"""
+
     __tablename__ = "canvas_snapshot"
     __table_args__ = (
-        UniqueConstraint("narrative_space_id", "version", name="uq_canvas_ns_ver"),
-        Index("idx_canvas_ns", "tenant_id", "narrative_space_id"),
+        UniqueConstraint("video_segment_id", "version", name="uq_canvas_seg_ver"),
+        Index("idx_canvas_seg", "tenant_id", "video_segment_id"),
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(32), nullable=False)
-    narrative_space_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    video_segment_id: Mapped[str] = mapped_column(String(32), nullable=False)
     nodes: Mapped[list] = mapped_column(JSON, nullable=False)
     edges: Mapped[list] = mapped_column(JSON, nullable=False)
     viewport: Mapped[dict | None] = mapped_column(JSON, nullable=True)

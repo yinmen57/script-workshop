@@ -36,7 +36,7 @@ apps/admin/src/
 |------|------|
 | AI Key 配置 | `/models`（按类目 Tab：语言 / 声音 / 生图 / 生视频 / 检索） |
 | 剧本工作台 | `/script-workspace` |
-| 叙事画布 | `/script-biz/canvas/:spaceId` |
+| 片段画布 | `/script-biz/canvas/:segmentId`（≤15s 视频片段） |
 
 由 `src/business/routes.tsx` / `menu.tsx` 导出，`App.tsx` / `AdminLayout` 挂载。去掉业务时删挂载即可，框架页可独立使用。
 

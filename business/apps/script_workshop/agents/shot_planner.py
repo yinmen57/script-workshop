@@ -18,4 +18,9 @@ SPEC = AgentSpec(
         "script/craft/visual-style",
     ),
     max_steps=10,
+    sample_prompts=(
+        "给这场戏排一下分镜",
+        "把分镜收成一段段能拍的短视频片段",
+        "给这些片段写好成片提示词",
+    ),
 )

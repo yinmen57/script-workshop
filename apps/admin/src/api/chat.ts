@@ -13,7 +13,7 @@ export type ChatCitation = {
 export type AgentStep = {
   step_no: number;
   agent_id: string;
-  type: "thought" | "tool" | string;
+  type: "thought" | "tool" | "tool_start" | "reasoning" | string;
   tool_id?: string | null;
   args?: Record<string, unknown> | null;
   output?: string | null;
@@ -24,6 +24,8 @@ export type AgentStep = {
 
 export type StreamHandlers = {
   onDelta?: (text: string) => void;
+  /** 模型思考过程（如方舟 DeepSeek reasoning_content） */
+  onReasoning?: (text: string) => void;
   onCitation?: (c: ChatCitation) => void;
   onStep?: (step: AgentStep) => void;
   onUsage?: (usage: Record<string, number>) => void;
@@ -47,7 +49,6 @@ export type ChatSelection = {
     shot_id?: string;
     title?: string;
   };
-  // 兼容扁平写法：直接把 type/id 放在顶层
   type?: string;
   id?: string;
   episode_id?: string;
@@ -57,64 +58,160 @@ export type ChatSelection = {
   title?: string;
 };
 
+function resolveChatWsUrl(token: string): string {
+  const path = `${baseURL.replace(/\/$/, "")}/chat/ws?token=${encodeURIComponent(token)}`;
+  if (path.startsWith("ws://") || path.startsWith("wss://")) return path;
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path.replace(/^http/, "ws");
+  }
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
+/**
+ * WebSocket 流式对话。关闭连接或 abort 即取消当前轮次。
+ */
 export async function streamChatCompletions(
   body: {
     slug: string;
     session_id?: string | null;
     message: string;
     selection?: ChatSelection | null;
-    /** 指定则只跑该 Agent；不传为全链路 coordinator */
     agent_id?: string | null;
   },
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ) {
   const token = useAuthStore.getState().accessToken;
-  const resp = await fetch(`${baseURL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ ...body, stream: true }),
-    signal,
-  });
-
-  if (!resp.ok || !resp.body) {
-    const text = await resp.text();
-    throw new Error(text || `HTTP ${resp.status}`);
+  if (!token) {
+    throw new Error("未登录");
+  }
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
   }
 
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
+  const ws = new WebSocket(resolveChatWsUrl(token));
+  let settled = false;
+  let sawTerminal = false;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() || "";
-
-    for (const part of parts) {
-      const lines = part.split("\n");
-      let event = "message";
-      const dataLines: string[] = [];
-      for (const line of lines) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+  const cleanup = () => {
+    signal?.removeEventListener("abort", onAbort);
+    if (
+      ws.readyState === WebSocket.OPEN ||
+      ws.readyState === WebSocket.CONNECTING
+    ) {
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: "cancel" }));
+        }
+      } catch {
+        /* ignore */
       }
-      if (!dataLines.length) continue;
-      const data = JSON.parse(dataLines.join("\n"));
-      if (event === "delta") handlers.onDelta?.(data.text || "");
-      if (event === "citation") handlers.onCitation?.(data);
-      if (event === "step") handlers.onStep?.(data);
-      if (event === "usage") handlers.onUsage?.(data);
-      if (event === "done") handlers.onDone?.(data);
-      if (event === "error") handlers.onError?.(data);
+      ws.close();
     }
-  }
+  };
+
+  const onAbort = () => {
+    cleanup();
+  };
+  signal?.addEventListener("abort", onAbort);
+
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          action: "chat",
+          slug: body.slug,
+          session_id: body.session_id ?? null,
+          message: body.message,
+          selection: body.selection ?? null,
+          agent_id: body.agent_id ?? null,
+        }),
+      );
+    };
+
+    ws.onmessage = (ev) => {
+      let msg: { event?: string; data?: Record<string, unknown> };
+      try {
+        msg = JSON.parse(String(ev.data));
+      } catch {
+        return;
+      }
+      const event = msg.event || "message";
+      const data = (msg.data || {}) as Record<string, unknown>;
+      if (event === "delta") {
+        handlers.onDelta?.(String(data.text || ""));
+        return;
+      }
+      if (event === "reasoning") {
+        handlers.onReasoning?.(String(data.text || ""));
+        return;
+      }
+      if (event === "citation") {
+        handlers.onCitation?.(data as ChatCitation);
+        return;
+      }
+      if (event === "step") {
+        handlers.onStep?.(data as unknown as AgentStep);
+        return;
+      }
+      if (event === "usage") {
+        handlers.onUsage?.(data as Record<string, number>);
+        return;
+      }
+      if (event === "done") {
+        sawTerminal = true;
+        handlers.onDone?.(data as {
+          session_id: string;
+          request_id: string;
+          run_id?: string;
+          answer: string;
+        });
+        settled = true;
+        cleanup();
+        resolve();
+        return;
+      }
+      if (event === "error") {
+        sawTerminal = true;
+        const code = String(data.code || "ERROR");
+        const message = String(data.message || "对话失败");
+        if (code === "CANCELLED") {
+          settled = true;
+          cleanup();
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        handlers.onError?.({ code, message });
+        settled = true;
+        cleanup();
+        // 业务错误已交给 onError，不再抛到外层避免重复提示
+        resolve();
+      }
+    };
+
+    ws.onerror = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("WebSocket 连接失败"));
+    };
+
+    ws.onclose = () => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      if (signal?.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      if (!sawTerminal) {
+        reject(new Error("WebSocket 连接已关闭"));
+        return;
+      }
+      resolve();
+    };
+  });
 }
 
 export async function getAgentRun(runId: string) {

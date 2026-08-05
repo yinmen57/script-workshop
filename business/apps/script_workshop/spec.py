@@ -16,6 +16,8 @@ def AgentSpec(  # noqa: N802 与历史用法一致：AgentSpec(...)
     namespaces: tuple[str, ...] = (),
     max_steps: int = 8,
     system_prompt_file: str = "system.md",
+    thinking: bool = False,
+    sample_prompts: tuple[str, ...] = (),
 ) -> FrameworkAgentSpec:
     return FrameworkAgentSpec(
         agent_id=agent_id,
@@ -28,4 +30,6 @@ def AgentSpec(  # noqa: N802 与历史用法一致：AgentSpec(...)
         namespaces=namespaces,
         max_steps=max_steps,
         system_prompt_file=system_prompt_file,
+        thinking=thinking,
+        sample_prompts=sample_prompts,
     )

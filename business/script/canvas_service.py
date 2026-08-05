@@ -1,6 +1,6 @@
-"""叙事空间画布快照：布局 / 视口持久化（第五段）。
+"""视频片段画布快照：布局 / 视口持久化。
 
-一空间一画布（D2）；节点生成走既有 /script-biz 工具，本模块只存布局。
+画布单位 = 视频片段（≤15s，D1/D2）；节点生成走既有 /script-biz 工具，本模块只存布局。
 """
 
 from __future__ import annotations
@@ -12,7 +12,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from business.script import parse_service, project_service, shot_service
-from framework.domain.errors import NotFoundError, ValidationAppError
+from business.script.video_segment_service import require_segment
+from framework.domain.errors import ValidationAppError
 from framework.domain.ids import new_id
 
 
@@ -28,7 +29,7 @@ def _snapshot_public(row: dict[str, Any]) -> dict[str, Any]:
         viewport = json.loads(viewport)
     return {
         "id": row["id"],
-        "narrative_space_id": row["narrative_space_id"],
+        "video_segment_id": row["video_segment_id"],
         "nodes": nodes or [],
         "edges": edges or [],
         "viewport": viewport,
@@ -38,40 +39,21 @@ def _snapshot_public(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _require_space(
-    session: AsyncSession, tenant_id: str, space_id: str
-) -> dict[str, Any]:
-    row = (
-        await session.execute(
-            text(
-                """
-                SELECT * FROM narrative_space
-                WHERE id = :id AND tenant_id = :tenant_id
-                """
-            ),
-            {"id": space_id, "tenant_id": tenant_id},
-        )
-    ).mappings().first()
-    if row is None:
-        raise NotFoundError("narrative space not found")
-    return dict(row)
-
-
 async def get_latest_snapshot(
-    session: AsyncSession, tenant_id: str, narrative_space_id: str
+    session: AsyncSession, tenant_id: str, video_segment_id: str
 ) -> dict | None:
-    await _require_space(session, tenant_id, narrative_space_id)
+    await require_segment(session, tenant_id, video_segment_id)
     row = (
         await session.execute(
             text(
                 """
                 SELECT * FROM canvas_snapshot
-                WHERE narrative_space_id = :ns_id AND tenant_id = :tenant_id
+                WHERE video_segment_id = :seg_id AND tenant_id = :tenant_id
                 ORDER BY version DESC
                 LIMIT 1
                 """
             ),
-            {"ns_id": narrative_space_id, "tenant_id": tenant_id},
+            {"seg_id": video_segment_id, "tenant_id": tenant_id},
         )
     ).mappings().first()
     return _snapshot_public(dict(row)) if row else None
@@ -98,18 +80,18 @@ def _sanitize_graph(nodes: list[Any], edges: list[Any]) -> tuple[list[Any], list
 async def save_snapshot(
     session: AsyncSession,
     tenant_id: str,
-    narrative_space_id: str,
+    video_segment_id: str,
     *,
     nodes: list[Any],
     edges: list[Any],
     viewport: dict[str, Any] | None = None,
 ) -> dict:
-    space = await _require_space(session, tenant_id, narrative_space_id)
+    segment = await require_segment(session, tenant_id, video_segment_id)
     if not isinstance(nodes, list) or not isinstance(edges, list):
         raise ValidationAppError("nodes / edges 必须是数组")
 
     nodes, edges = _sanitize_graph(nodes, edges)
-    latest = await get_latest_snapshot(session, tenant_id, narrative_space_id)
+    latest = await get_latest_snapshot(session, tenant_id, video_segment_id)
     # 自动保存就地更新；version 自增作乐观并发标记，不堆历史行
     if latest:
         next_version = int(latest["version"]) + 1
@@ -149,9 +131,9 @@ async def save_snapshot(
             text(
                 """
                 INSERT INTO canvas_snapshot
-                  (id, tenant_id, narrative_space_id, nodes, edges, viewport, version)
+                  (id, tenant_id, video_segment_id, nodes, edges, viewport, version)
                 VALUES
-                  (:id, :tenant_id, :narrative_space_id,
+                  (:id, :tenant_id, :video_segment_id,
                    CAST(:nodes AS JSON), CAST(:edges AS JSON),
                    CAST(:viewport AS JSON), :version)
                 """
@@ -159,7 +141,7 @@ async def save_snapshot(
             {
                 "id": snap_id,
                 "tenant_id": tenant_id,
-                "narrative_space_id": narrative_space_id,
+                "video_segment_id": video_segment_id,
                 "nodes": json.dumps(nodes, ensure_ascii=False),
                 "edges": json.dumps(edges, ensure_ascii=False),
                 "viewport": json.dumps(viewport, ensure_ascii=False)
@@ -176,19 +158,20 @@ async def save_snapshot(
             )
         ).mappings().first()
     public = _snapshot_public(dict(row))
-    public["project_id"] = space["project_id"]
+    public["project_id"] = segment["project_id"]
+    public["narrative_space_id"] = segment["narrative_space_id"]
     return public
 
 
 def _default_layout(
     *,
-    space: dict[str, Any],
+    segment: dict[str, Any],
     characters: list[dict[str, Any]],
     props: list[dict[str, Any]],
     shots: list[dict[str, Any]],
     video_prompt: dict[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """按依赖图生成初始节点与边：人物/道具 → 分镜 → 成片。"""
+    """按依赖图生成初始节点与边：人物/道具 → 本片段分镜 → 成片。"""
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     y = 0
@@ -271,6 +254,10 @@ def _default_layout(
                 )
 
     video_id = "video_out"
+    duration = segment.get("duration_sec")
+    duration_label = (
+        f"{float(duration):.1f}s" if duration is not None else "≤15s"
+    )
     nodes.append(
         {
             "id": video_id,
@@ -278,10 +265,12 @@ def _default_layout(
             "position": {"x": 700, "y": 80},
             "data": {
                 "kind": "video_out",
-                "narrative_space_id": space["id"],
+                "video_segment_id": segment["id"],
+                "narrative_space_id": segment["narrative_space_id"],
                 "video_prompt_id": (video_prompt or {}).get("id"),
                 "label": "成片视频",
-                "title": space.get("title") or "",
+                "title": segment.get("title") or f"片段 {segment.get('ordinal')}",
+                "beat": duration_label,
                 "record_status": (video_prompt or {}).get("record_status"),
                 "status": "idle",
             },
@@ -300,21 +289,32 @@ def _default_layout(
 
 
 async def get_or_bootstrap(
-    session: AsyncSession, tenant_id: str, narrative_space_id: str
+    session: AsyncSession, tenant_id: str, video_segment_id: str
 ) -> dict:
-    """读取最新快照；若无则按资产/分镜自动铺节点。"""
-    space = await _require_space(session, tenant_id, narrative_space_id)
-    project_id = space["project_id"]
+    """读取最新快照；若无则按本片段分镜/资产自动铺节点。"""
+    segment = await require_segment(session, tenant_id, video_segment_id)
+    project_id = segment["project_id"]
+    narrative_space_id = segment["narrative_space_id"]
     await project_service.require_project(session, tenant_id, project_id)
+    raw_shot_ids = segment.get("shot_ids")
+    if isinstance(raw_shot_ids, str):
+        raw_shot_ids = json.loads(raw_shot_ids)
+    segment_shot_ids = list(raw_shot_ids or [])
 
-    latest = await get_latest_snapshot(session, tenant_id, narrative_space_id)
+    latest = await get_latest_snapshot(session, tenant_id, video_segment_id)
+    segment_meta = {
+        "id": segment["id"],
+        "title": segment.get("title") or f"片段 {segment.get('ordinal')}",
+        "ordinal": int(segment["ordinal"]),
+        "duration_sec": float(segment["duration_sec"])
+        if segment.get("duration_sec") is not None
+        else None,
+        "narrative_space_id": narrative_space_id,
+    }
     if latest and latest.get("nodes"):
         latest["project_id"] = project_id
-        latest["space"] = {
-            "id": space["id"],
-            "title": space.get("title"),
-            "time_place": space.get("time_place"),
-        }
+        latest["narrative_space_id"] = narrative_space_id
+        latest["segment"] = segment_meta
         return latest
 
     assets = await parse_service.get_assets(session, tenant_id, project_id)
@@ -324,17 +324,21 @@ async def get_or_bootstrap(
         project_id,
         narrative_space_id=narrative_space_id,
     )
-    # 仅保留本空间分镜引用到的人物/道具
+    allowed_shot_ids = set(segment_shot_ids)
+    segment_shots = [
+        s for s in shots_bundle["items"] if s["id"] in allowed_shot_ids
+    ]
+    # 仅保留本片段分镜引用到的人物/道具
     used_chars: set[str] = set()
     used_props: set[str] = set()
-    for s in shots_bundle["items"]:
+    for s in segment_shots:
         used_chars.update(s.get("character_ids") or [])
         used_props.update(s.get("prop_ids") or [])
     characters = [
         c for c in assets["characters"] if not used_chars or c["id"] in used_chars
     ]
     props = [p for p in assets["props"] if not used_props or p["id"] in used_props]
-    if not shots_bundle["items"]:
+    if not segment_shots:
         characters = assets["characters"]
         props = assets["props"]
 
@@ -343,36 +347,33 @@ async def get_or_bootstrap(
             text(
                 """
                 SELECT * FROM video_prompt
-                WHERE narrative_space_id = :ns_id AND tenant_id = :tenant_id
+                WHERE video_segment_id = :seg_id AND tenant_id = :tenant_id
                 ORDER BY version DESC
                 LIMIT 1
                 """
             ),
-            {"ns_id": narrative_space_id, "tenant_id": tenant_id},
+            {"seg_id": video_segment_id, "tenant_id": tenant_id},
         )
     ).mappings().first()
     video_prompt = dict(vp_row) if vp_row else None
 
     nodes, edges = _default_layout(
-        space=space,
+        segment=segment,
         characters=characters,
         props=props,
-        shots=shots_bundle["items"],
+        shots=segment_shots,
         video_prompt=video_prompt,
     )
     saved = await save_snapshot(
         session,
         tenant_id,
-        narrative_space_id,
+        video_segment_id,
         nodes=nodes,
         edges=edges,
         viewport={"x": 0, "y": 0, "zoom": 1},
     )
     saved["project_id"] = project_id
-    saved["space"] = {
-        "id": space["id"],
-        "title": space.get("title"),
-        "time_place": space.get("time_place"),
-    }
+    saved["narrative_space_id"] = narrative_space_id
+    saved["segment"] = segment_meta
     saved["bootstrapped"] = True
     return saved

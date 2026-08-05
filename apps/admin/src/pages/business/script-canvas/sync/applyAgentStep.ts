@@ -1,5 +1,5 @@
 /**
- * 对话 SSE event:step → 画布节点状态（双模式 5.3）。
+ * 对话 SSE event:step → 画布节点状态（双模式）。
  * 工具 id 与画布按钮共用同一套业务能力。
  */
 import type { Node } from "@xyflow/react";
@@ -9,7 +9,7 @@ import type { NarrativeNodeData } from "../nodes/types";
 export const CANVAS_STEP_CHANNEL = "script-canvas-steps";
 
 export type CanvasStepMessage = {
-  spaceId?: string | null;
+  segmentId?: string | null;
   projectId?: string | null;
   step: AgentStep;
 };
@@ -18,14 +18,14 @@ export type CanvasStepMessage = {
 export function applyAgentStepToNodes(
   nodes: Node[],
   step: AgentStep,
-  opts: { spaceId: string; projectId?: string },
+  opts: { segmentId: string; projectId?: string },
 ): Node[] {
   if (step.type !== "tool" || !step.tool_id) return nodes;
   const args = (step.args || {}) as Record<string, unknown>;
-  const argSpace =
-    typeof args.narrative_space_id === "string" ? args.narrative_space_id : null;
-  // 带空间参数时只同步当前画布
-  if (argSpace && argSpace !== opts.spaceId) return nodes;
+  const argSeg =
+    typeof args.video_segment_id === "string" ? args.video_segment_id : null;
+  // 带片段参数时只同步当前画布
+  if (argSeg && argSeg !== opts.segmentId) return nodes;
 
   const status: NarrativeNodeData["status"] = step.error ? "failed" : "done";
   const error = step.error || undefined;
@@ -54,6 +54,5 @@ export function applyAgentStepToNodes(
   ) {
     return matchKinds(["video_out"]);
   }
-  // parse-script 不直接改本空间节点布局（需重新 bootstrap）
   return nodes;
 }

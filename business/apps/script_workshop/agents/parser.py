@@ -8,4 +8,9 @@ SPEC = AgentSpec(
     tools=("inspect", "parse-script", "parse-structure", "retrieve"),
     namespaces=("script/craft/prompting",),
     max_steps=6,
+    sample_prompts=(
+        "把这份剧本拆开，把人物、道具和整体风格抠出来",
+        "先别用大模型，按规则把集和场次粗切一下就行",
+        "看看解析弄好了没有，人物道具齐不齐",
+    ),
 )

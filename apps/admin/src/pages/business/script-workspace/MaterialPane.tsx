@@ -3,6 +3,7 @@
  */
 import { Button, Empty, Image, Space, Tag, Typography, message } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import {
   confirmMaterialPrompt,
   confirmScriptAsset,
@@ -18,6 +19,7 @@ type Props = {
 };
 
 export function MaterialPane({ projectId, selection }: Props) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const assets = useQuery({
     queryKey: ["script-workspace", "assets", projectId],
@@ -116,6 +118,16 @@ export function MaterialPane({ projectId, selection }: Props) {
           {prompt ? (
             <Button
               size="small"
+              onClick={() =>
+                navigate(`/script-biz/generate/image/${prompt.id}`)
+              }
+            >
+              查看物料提示词
+            </Button>
+          ) : null}
+          {prompt ? (
+            <Button
+              size="small"
               loading={confirmPromptMut.isPending}
               onClick={() => confirmPromptMut.mutate(prompt.id)}
             >
@@ -176,15 +188,24 @@ export function MaterialPane({ projectId, selection }: Props) {
             {prompt.record_status === "confirmed" ? "已确认" : "AI"}
           </Tag>
         </Space>
-        <Button
-          size="small"
-          type="primary"
-          style={{ marginBottom: 12 }}
-          loading={confirmPromptMut.isPending}
-          onClick={() => confirmPromptMut.mutate(prompt.id)}
-        >
-          定版
-        </Button>
+        <Space style={{ marginBottom: 12 }}>
+          <Button
+            size="small"
+            type="primary"
+            onClick={() =>
+              navigate(`/script-biz/generate/image/${prompt.id}`)
+            }
+          >
+            打开生成确认画布
+          </Button>
+          <Button
+            size="small"
+            loading={confirmPromptMut.isPending}
+            onClick={() => confirmPromptMut.mutate(prompt.id)}
+          >
+            定版
+          </Button>
+        </Space>
         <div className="script-workspace__prompt">{prompt.prompt_text}</div>
       </div>
     );
